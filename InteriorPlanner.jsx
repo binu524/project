@@ -7,7 +7,7 @@ const InteriorPlanner = () => {
     { id: 1, name: '침대', w: 150, h: 200, x: 0, y: 0, color: 'bg-blue-200' },
     { id: 2, name: '책상', w: 120, h: 60, x: 0, y: 0, color: 'bg-green-200' },
     { id: 3, name: '옷장', w: 180, h: 80, x: 0, y: 0, color: 'bg-yellow-200' },
-  ]); [cite: 28, 99]
+  ]);
   const [recommendations, setRecommendations] = useState([]);
 
   // 2. 자동 배치 엔진 (기획안 핵심 로직 구현) [cite: 32, 39]
