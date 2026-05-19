@@ -20,6 +20,7 @@ const InteriorPlanner = () => {
 
   const [furnitureTypeInput, setFurnitureTypeInput] = useState('침대');
   const [furnitureColorInput, setFurnitureColorInput] = useState('#93c5fd');
+  const [customFurnitureName, setCustomFurnitureName] = useState('');
   const [placedFurniture, setPlacedFurniture] = useState([]);
   const [selectedFurnitureId, setSelectedFurnitureId] = useState(null);
   const [aiRecommendations, setAiRecommendations] = useState([]);
@@ -108,26 +109,69 @@ const InteriorPlanner = () => {
     const margin = 20;
     const sorted = [...placedFurniture].sort((a, b) => (b.width * b.height) - (a.width * a.height));
 
+    const activePairs = pairOptions.filter(p => p.enabled);
+    const pairedItemIds = new Set();
+
+    const groupedItems = activePairs.flatMap(pair => {
+      const primary = sorted.find(item => item.name === pair.primary && !pairedItemIds.has(item.id));
+      const secondary = sorted.find(item => item.name === pair.secondary && !pairedItemIds.has(item.id));
+      if (!primary || !secondary) return [];
+      pairedItemIds.add(primary.id);
+      pairedItemIds.add(secondary.id);
+      return [
+        { ...primary, pairId: pair.id, pairRole: 'primary' },
+        { ...secondary, pairId: pair.id, pairRole: 'secondary' }
+      ];
+    });
+
+    const ungrouped = sorted.filter(item => !pairedItemIds.has(item.id));
+    const orderedItems = [...groupedItems, ...ungrouped];
+
     const generateLayout = (type) => {
       const result = [];
+      const groupPlacement = {};
       let cx = baseRoom.x + margin, cy = baseRoom.y + margin, rh = 0;
 
-      sorted.forEach((item) => {
+      const getAdjacentSpots = (base, item) => {
+        return [
+          { x: base.x + base.width + margin, y: base.y },
+          { x: base.x - item.width - margin, y: base.y },
+          { x: base.x, y: base.y + base.height + margin },
+          { x: base.x, y: base.y - item.height - margin },
+          { x: base.x + base.width + margin, y: base.y + base.height - item.height },
+          { x: base.x - item.width - margin, y: base.y + base.height - item.height },
+          { x: base.x + base.width + margin, y: base.y - item.height },
+          { x: base.x - item.width - margin, y: base.y - item.height }
+        ];
+      };
+
+      orderedItems.forEach((item) => {
         let placed = false, attempts = 0;
-        // 시도 횟수를 늘리고, 실패 시 강제 배치 로직 추가
+        const groupBase = item.pairId && item.pairRole === 'secondary' ? groupPlacement[item.pairId] : null;
+
         while (!placed && attempts < 50) {
           let tx, ty;
-          if (type === 'rest') {
+
+          if (groupBase) {
+            const candidates = getAdjacentSpots(groupBase, item);
+            const spot = candidates[attempts % candidates.length];
+            tx = spot.x;
+            ty = spot.y;
+            if (attempts >= candidates.length) {
+              tx = baseRoom.x + margin + Math.random() * (baseRoom.width - item.width - margin * 2);
+              ty = baseRoom.y + margin + Math.random() * (baseRoom.height - item.height - margin * 2);
+            }
+          } else if (type === 'rest') {
             const cand = [
-              {x:baseRoom.x+margin, y:baseRoom.y+margin}, 
-              {x:baseRoom.x+baseRoom.width-item.width-margin, y:baseRoom.y+margin}, 
-              {x:baseRoom.x+margin, y:baseRoom.y+baseRoom.height-item.height-margin}, 
+              {x:baseRoom.x+margin, y:baseRoom.y+margin},
+              {x:baseRoom.x+baseRoom.width-item.width-margin, y:baseRoom.y+margin},
+              {x:baseRoom.x+margin, y:baseRoom.y+baseRoom.height-item.height-margin},
               {x:baseRoom.x+baseRoom.width-item.width-margin, y:baseRoom.y+baseRoom.height-item.height-margin}
             ];
             tx = cand[attempts % 4].x; ty = cand[attempts % 4].y;
-            if (attempts > 4) { // 구석이 다 찼으면 랜덤 위치 시도
-                tx = baseRoom.x + margin + (Math.random() * (baseRoom.width - item.width - margin * 2));
-                ty = baseRoom.y + margin + (Math.random() * (baseRoom.height - item.height - margin * 2));
+            if (attempts > 4) {
+              tx = baseRoom.x + margin + (Math.random() * (baseRoom.width - item.width - margin * 2));
+              ty = baseRoom.y + margin + (Math.random() * (baseRoom.height - item.height - margin * 2));
             }
           } else {
             if (cx + item.width + margin > baseRoom.x + baseRoom.width - margin) { cx = baseRoom.x + margin; cy += rh + margin; rh = 0; }
@@ -135,36 +179,48 @@ const InteriorPlanner = () => {
           }
 
           const test = { ...item, x: snap(tx), y: snap(ty) };
-          if (isValidPosition(test, result, baseRoom)) { 
-            result.push(test); 
-            if(type==='grid') { cx += item.width + margin; rh = Math.max(rh, item.height); }
-            placed = true; 
-          } else { 
-            cx += 20; attempts++; 
+          if (!groupBase) {
+            test.x = Math.max(baseRoom.x, Math.min(test.x, baseRoom.x + baseRoom.width - item.width));
+            test.y = Math.max(baseRoom.y, Math.min(test.y, baseRoom.y + baseRoom.height - item.height));
           }
 
-          // [마지막 수단] 모든 시도가 실패해도 가구가 사라지지 않게 강제로 리스트에 추가
+          if (isValidPosition(test, result, baseRoom)) {
+            result.push(test);
+            if (item.pairId && item.pairRole === 'primary') {
+              groupPlacement[item.pairId] = test;
+            }
+            if (type === 'grid') { cx += item.width + margin; rh = Math.max(rh, item.height); }
+            placed = true;
+          } else {
+            attempts += 1;
+            if (!groupBase) {
+              cx += 20;
+            }
+          }
+
           if (attempts === 49 && !placed) {
-            // 경계 내에 맞도록 강제 배치
             let forcedX = baseRoom.x + margin;
             let forcedY = baseRoom.y + margin;
-            // 가구가 방 밖으로 나가지 않도록 조정
             if (forcedX + item.width > baseRoom.x + baseRoom.width - margin) {
               forcedX = baseRoom.x + baseRoom.width - item.width - margin;
             }
             if (forcedY + item.height > baseRoom.y + baseRoom.height - margin) {
               forcedY = baseRoom.y + baseRoom.height - item.height - margin;
             }
-            // 최소 크기 보장
             forcedX = Math.max(baseRoom.x, forcedX);
             forcedY = Math.max(baseRoom.y, forcedY);
-            result.push({ ...item, x: snap(forcedX), y: snap(forcedY) });
+            const forced = { ...item, x: snap(forcedX), y: snap(forcedY) };
+            result.push(forced);
+            if (item.pairId && item.pairRole === 'primary') {
+              groupPlacement[item.pairId] = forced;
+            }
             placed = true;
           }
         }
       });
       return result;
     };
+
     setAiRecommendations([
       { id: 'A', name: '추천안 A (벽 중심)', score: 88, items: generateLayout('rest') },
       { id: 'B', name: '추천안 B (균형 배치)', score: 94, items: generateLayout('grid') }
@@ -221,26 +277,54 @@ const InteriorPlanner = () => {
       }
     }
     if (draftFurniture && rooms.length > 0) {
-      const x = Math.min(draftFurniture.start.x, draftFurniture.end.x), y = Math.min(draftFurniture.start.y, draftFurniture.end.y);
-      let w = Math.abs(draftFurniture.start.x - draftFurniture.end.x), h = Math.abs(draftFurniture.start.y - draftFurniture.end.y);
-      
-      // 드래그 거리가 1px 이상이면 가구 배치 (고정 크기 80x60 또는 드래그 크기)
-      if (w > 0 && h > 0) {
-        // 드래그 크기가 너무 작으면 기본 크기 사용 (80x60)
-        if (w < 80 || h < 60) {
-          w = 80;
-          h = 60;
-        }
-        
+      const rawX = Math.min(draftFurniture.start.x, draftFurniture.end.x), rawY = Math.min(draftFurniture.start.y, draftFurniture.end.y);
+      const rawW = Math.abs(draftFurniture.start.x - draftFurniture.end.x), rawH = Math.abs(draftFurniture.start.y - draftFurniture.end.y);
+
+      // 드래그가 1px 이상이면 배치 시도
+      if (rawW > 0 && rawH > 0) {
         const baseRoom = rooms[0];
-        const groupId = Date.now();
-        const newItem = { id: ++nextIdRef.current, name: furnitureTypeInput, x, y, width: w, height: h, color: furnitureColorInput, groupId };
 
-        if (!isValidPosition(newItem, placedFurniture, baseRoom)) {
-          return; // 배치 불가
+        // 스냅된 크기 또는 최소 그리드 크기 허용 (작은 드래그도 배치)
+        let w = Math.max(snap(rawW), gridSize);
+        let h = Math.max(snap(rawH), gridSize);
+
+        // 기본 가구 크기가 너무 클 때를 대비한 제한 (방 크기보다 작게)
+        w = Math.min(w, baseRoom.width - gridSize);
+        h = Math.min(h, baseRoom.height - gridSize);
+
+        // 위치 보정: 가구가 방 밖으로 나가지 않도록 조정
+        let x = snap(rawX);
+        let y = snap(rawY);
+        if (x + w > baseRoom.x + baseRoom.width) x = baseRoom.x + baseRoom.width - w;
+        if (y + h > baseRoom.y + baseRoom.height) y = baseRoom.y + baseRoom.height - h;
+        x = Math.max(baseRoom.x, x);
+        y = Math.max(baseRoom.y, y);
+
+          const furnitureName = (furnitureTypeInput === '기타') ? (customFurnitureName || '기타') : furnitureTypeInput;
+          const newItem = { id: ++nextIdRef.current, name: furnitureName, x, y, width: w, height: h, color: furnitureColorInput, groupId: Date.now() };
+
+        if (isValidPosition(newItem, placedFurniture, baseRoom)) {
+          setPlacedFurniture([...placedFurniture, newItem]);
+        } else {
+          // 충돌 시 방 내부를 스캔해 빈 영역을 찾아 배치 시도
+          let placed = false;
+          const step = gridSize;
+          for (let yy = baseRoom.y + gridSize; yy <= baseRoom.y + baseRoom.height - h - gridSize; yy += step) {
+            for (let xx = baseRoom.x + gridSize; xx <= baseRoom.x + baseRoom.width - w - gridSize; xx += step) {
+              const test = { ...newItem, x: snap(xx), y: snap(yy) };
+              if (isValidPosition(test, placedFurniture, baseRoom)) {
+                setPlacedFurniture([...placedFurniture, test]);
+                placed = true;
+                break;
+              }
+            }
+            if (placed) break;
+          }
+          if (!placed) {
+            // 최종적으로 배치 불가하면 아무 작업 안함
+            return;
+          }
         }
-
-        setPlacedFurniture([...placedFurniture, newItem]);
       }
     }
     setDraftRoom(null); setDraftFurniture(null); setIsDragging(false);
@@ -306,6 +390,9 @@ const InteriorPlanner = () => {
   const missingPairs = getMissingPairs();
   const hasMissingPairs = missingPairs.length > 0;
 
+  // 책상-의자 같은 필수 쌍 검사 (간단 버전)
+  const hasDeskWithoutChair = placedFurniture.some(f => f.name === '책상') && !placedFurniture.some(f => f.name === '의자');
+
   // 방에 직접 가구 배치 함수
   const placeFurnitureDirectly = () => {
     if (rooms.length === 0) return;
@@ -316,9 +403,10 @@ const InteriorPlanner = () => {
     const randomX = baseRoom.x + margin + Math.random() * (baseRoom.width - 200 - margin * 2);
     const randomY = baseRoom.y + margin + Math.random() * (baseRoom.height - 100 - margin * 2);
     
+    const furnitureName = (furnitureTypeInput === '기타') ? (customFurnitureName || '기타') : furnitureTypeInput;
     const newItem = {
       id: ++nextIdRef.current,
-      name: furnitureTypeInput,
+      name: furnitureName,
       x: snap(randomX),
       y: snap(randomY),
       width: 100,
@@ -337,10 +425,125 @@ const InteriorPlanner = () => {
     }
   };
 
-  const analysis = (rooms.length > 0) ? {
-    totalScore: Math.round(85 * 0.4 + (windows.length > 0 ? 90 : 40) * 0.3 + (doors.length > 0 ? 80 : 20) * 0.3),
-    traffic: doors.length > 0 ? 85 : 20, light: windows.length > 0 ? 90 : 40, space: 80
-  } : null;
+  // 결과 분석 점수 구성 (세부 계산)
+  const analysis = (() => {
+    if (rooms.length === 0) return null;
+    const room = rooms[0];
+
+    const pxToMeter = (px) => px / gridSize;
+    const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+    const clamp = (v, a = 0, b = 100) => Math.max(a, Math.min(b, v));
+
+    const getCenter = (rect) => ({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
+
+    // line sampling intersection test (approx)
+    const rectIntersectsLine = (r, x1, y1, x2, y2) => {
+      const steps = Math.max(2, Math.ceil(Math.hypot(x2 - x1, y2 - y1) / (gridSize / 2)));
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        const x = x1 + (x2 - x1) * t;
+        const y = y1 + (y2 - y1) * t;
+        if (x >= r.x && x <= r.x + r.width && y >= r.y && y <= r.y + r.height) return true;
+      }
+      return false;
+    };
+
+    // --- 1) 동선 점수 (circulation)
+    // compute distances from each door to nearest bed and desk
+    let totalDistanceM = 0;
+    let obstaclePenalty = 0;
+    const doorCenters = doors.map(d => ({ x: (d.start.x + d.end.x) / 2, y: (d.start.y + d.end.y) / 2 }));
+    const beds = placedFurniture.filter(f => f.name === '침대');
+    const desks = placedFurniture.filter(f => f.name === '책상');
+    const furnitureRects = placedFurniture.map(f => ({ x: f.x, y: f.y, width: f.width, height: f.height, id: f.id }));
+
+    doorCenters.forEach(dc => {
+      // nearest bed
+      const targets = [...beds, ...desks];
+      targets.forEach(t => {
+        const tc = getCenter(t);
+        const dpx = dist(dc, tc);
+        totalDistanceM += pxToMeter(dpx);
+        // check obstacles along straight line
+        const blocked = furnitureRects.some(r => r.id !== t.id && rectIntersectsLine(r, dc.x, dc.y, tc.x, tc.y));
+        if (blocked) obstaclePenalty += 10;
+      });
+    });
+
+    // narrow clearance penalty: find minimal gap between any two furniture bounding boxes
+    let minGapM = Infinity;
+    for (let i = 0; i < furnitureRects.length; i++) {
+      for (let j = i + 1; j < furnitureRects.length; j++) {
+        const a = furnitureRects[i];
+        const b = furnitureRects[j];
+        const gapX = Math.max(0, Math.max(b.x - (a.x + a.width), a.x - (b.x + b.width)));
+        const gapY = Math.max(0, Math.max(b.y - (a.y + a.height), a.y - (b.y + b.height)));
+        const gap = Math.hypot(gapX, gapY);
+        minGapM = Math.min(minGapM, pxToMeter(gap));
+      }
+    }
+    if (!isFinite(minGapM)) minGapM = Math.max(room.width, room.height) / gridSize; // large
+    const minClearanceThreshold = 0.6; // meters
+    const narrowPenalty = minGapM < minClearanceThreshold ? ((minClearanceThreshold - minGapM) / minClearanceThreshold) * 30 : 0;
+
+    // distance penalty: 2 points per meter of travel
+    const distancePenalty = totalDistanceM * 2;
+    const circulationRaw = 100 - (distancePenalty + obstaclePenalty + narrowPenalty);
+    const circulation = clamp(Math.round(circulationRaw), 0, 100);
+
+    // --- 2) 채광 점수 (lighting)
+    // basic model: furniture with significant height near window can reduce daylight
+    const heightMap = { '침대': 0.5, '책상': 0.75, '소파': 0.8, '식탁': 0.75, '의자': 0.45, '선반': 1.8, '옷장': 2.0, '냉장고': 1.8, '세탁기': 0.9 };
+    let lightPenalty = 0;
+    const windowCenters = windows.map(w => ({ x: (w.start.x + w.end.x) / 2, y: (w.start.y + w.end.y) / 2 }));
+    placedFurniture.forEach(f => {
+      const fc = getCenter(f);
+      const h = heightMap[f.name] || 1.0;
+      windowCenters.forEach(wc => {
+        const dM = pxToMeter(dist(fc, wc));
+        if (dM < 3 && h > 1.2) {
+          // tall close furniture blocks light
+          lightPenalty += (3 - dM) * 8; // up to 24 points
+        }
+        // bed immediately in front of window causes glare penalty
+        if (f.name === '침대' && dM < 1) lightPenalty += 10;
+      });
+    });
+    const lighting = clamp(Math.round(100 - lightPenalty), 0, 100);
+
+    // --- 3) 수납 효율 (storage)
+    const storageTypes = ['옷장', '선반'];
+    const roomAreaM2 = (room.width * room.height) / (gridSize * gridSize);
+    let totalStorageVolume = 0;
+    placedFurniture.forEach(f => {
+      if (storageTypes.includes(f.name)) {
+        const areaM2 = (f.width * f.height) / (gridSize * gridSize);
+        const h = heightMap[f.name] || 1.8;
+        const volume = areaM2 * h; // m^3
+        totalStorageVolume += volume;
+      }
+    });
+    // expected good storage volume ~ roomAreaM2 * 0.4 (m3 기준 with 0.4m height baseline)
+    const expectedStorage = roomAreaM2 * 0.5; // target m3
+    const storageScore = clamp(Math.round(Math.min(100, (totalStorageVolume / (expectedStorage || 1)) * 100)));
+
+    // --- 4) 공간 활용률 (space utilization)
+    const totalFurnitureAreaM2 = placedFurniture.reduce((s, f) => s + ((f.width * f.height) / (gridSize * gridSize)), 0);
+    const utilizationRatio = totalFurnitureAreaM2 / (roomAreaM2 || 1);
+    // ideal occupancy ~ 25% (0.25), score penalizes deviation
+    const utilizationScore = clamp(Math.round(100 - (Math.abs(utilizationRatio - 0.25) / 0.25) * 100));
+
+    // --- Total weighted score
+    const totalScore = Math.round(0.5 * circulation + 0.2 * lighting + 0.2 * utilizationScore + 0.1 * storageScore);
+
+    return {
+      totalScore,
+      traffic: circulation,
+      light: lighting,
+      space: utilizationScore,
+      storage: storageScore
+    };
+  })();
 
   return (
     <div style={{ padding: '40px', backgroundColor: '#fcfaff', minHeight: '100vh', fontFamily: 'sans-serif' }}>
@@ -429,13 +632,25 @@ const InteriorPlanner = () => {
                 </div>
               ) : (
                 <>
-                  <div style={{ textAlign: 'center', padding: '20px', backgroundColor: '#f5f3ff', borderRadius: '16px', marginBottom: '20px' }}>
-                    <p style={{ fontSize: '44px', fontWeight: '900', margin: '8px 0', color: '#4338ca' }}>{analysis?.totalScore}점</p>
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '14px', fontWeight: 'bold' }}>
-                    <p>🚶 동선: {analysis?.traffic}점</p>
-                    <p>☀️ 채광: {analysis?.light}점</p>
-                    <p>📦 공간: {analysis?.space}점</p>
+                  <div style={{ textAlign: 'center', marginBottom: '18px' }}>
+                    <div style={{ textAlign: 'center', padding: '18px', backgroundColor: '#f5f3ff', borderRadius: '16px', marginBottom: '12px' }}>
+                      <p style={{ fontSize: '40px', fontWeight: '900', margin: '6px 0', color: '#4338ca' }}>{analysis?.totalScore}점</p>
+                      <div style={{ fontSize: '12px', color: '#6b7280' }}>종합 점수</div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '12px', justifyContent: 'space-between' }}>
+                      <div style={{ flex: 1, padding: '12px', backgroundColor: '#f8fafc', borderRadius: '12px', textAlign: 'center', border: '1px solid #e6eefc' }}>
+                        <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '6px' }}>🚶 동선</div>
+                        <div style={{ fontSize: '22px', fontWeight: '800', color: '#0ea5e9' }}>{analysis?.traffic}점</div>
+                      </div>
+                      <div style={{ flex: 1, padding: '12px', backgroundColor: '#f8fafc', borderRadius: '12px', textAlign: 'center', border: '1px solid #f0e6ff' }}>
+                        <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '6px' }}>☀️ 채광</div>
+                        <div style={{ fontSize: '22px', fontWeight: '800', color: '#f59e0b' }}>{analysis?.light}점</div>
+                      </div>
+                      <div style={{ flex: 1, padding: '12px', backgroundColor: '#f8fafc', borderRadius: '12px', textAlign: 'center', border: '1px solid #eef6e9' }}>
+                        <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '6px' }}>📦 공간</div>
+                        <div style={{ fontSize: '22px', fontWeight: '800', color: '#10b981' }}>{analysis?.space}점</div>
+                      </div>
+                    </div>
                   </div>
                 </>
               )}
@@ -455,6 +670,15 @@ const InteriorPlanner = () => {
                 <option>냉장고</option>
                 <option>기타</option>
               </select>
+              {furnitureTypeInput === '기타' && (
+                <input
+                  type="text"
+                  placeholder="가구 이름 입력 (예: 러그)"
+                  value={customFurnitureName}
+                  onChange={e => setCustomFurnitureName(e.target.value)}
+                  style={{ width: '100%', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '12px', marginBottom: '10px' }}
+                />
+              )}
               <input type="color" value={furnitureColorInput} onChange={e => setFurnitureColorInput(e.target.value)} style={{ width: '100%', height: '44px', border: 'none', borderRadius: '12px', cursor: 'pointer', marginBottom: '20px' }} />
               <div style={{ display: 'flex', gap: '10px', marginBottom: '16px' }}>
                 <button onClick={generateAiRecommendations} style={{ flex: 1, padding: '18px', backgroundColor: '#a855f7', color: '#fff', borderRadius: '18px', fontWeight: '900', border: 'none', cursor: 'pointer' }}>AI 배치</button>
