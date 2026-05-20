@@ -10,7 +10,7 @@ const InteriorPlanner = () => {
   const [walls, setWalls] = useState([]);
   const [rooms, setRooms] = useState([]);
   const [windows, setWindows] = useState([]);
-  const [doors, setDoors] = useState([]); // 문은 이제 { id, start, end, swingSide } 형태를 가집니다.
+  const [doors, setDoors] = useState([]);
   const [history, setHistory] = useState([]); 
   const [lineStart, setLineStart] = useState(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
@@ -37,7 +37,7 @@ const InteriorPlanner = () => {
   const [furnitureColorInput, setFurnitureColorInput] = useState('#93c5fd');
   const [placedFurniture, setPlacedFurniture] = useState([]);
   
-  // [NEW] 다중 선택 및 드래그 상태
+  // 다중 선택 및 드래그 상태
   const [selectedFurnitureIds, setSelectedFurnitureIds] = useState([]);
   const [dragStartPos, setDragStartPos] = useState({ x: 0, y: 0 });
   const [dragInitialFurniture, setDragInitialFurniture] = useState([]);
@@ -95,9 +95,9 @@ const InteriorPlanner = () => {
     r1.y < r2.y + r2.height && r1.y + r1.height > r2.y
   );
 
-  // [강화됨] 선분(벽)-사각형 충돌 교차 알고리즘 (벽 통과 완벽 차단)
+  // 선분(벽)-사각형 교차 알고리즘
   const checkWallCollision = (furniture, wall) => {
-    const eps = 0.5; // 가장자리 밀착은 허용하기 위한 미세 여백
+    const eps = 0.5;
     const fLeft = furniture.x + eps; const fRight = furniture.x + furniture.width - eps;
     const fTop = furniture.y + eps; const fBottom = furniture.y + furniture.height - eps;
 
@@ -123,7 +123,6 @@ const InteriorPlanner = () => {
     return false;
   };
 
-  // [NEW] 문의 열림 반경(부채꼴) 사각형 충돌 범위 반환
   const getDoorSwingBox = (door) => {
     const dx = door.end.x - door.start.x;
     const dy = door.end.y - door.start.y;
@@ -141,7 +140,7 @@ const InteriorPlanner = () => {
     return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
   };
 
-  // 통합 유효성 검사
+  // [강화됨] 문 통행로 및 회전 반경 침범 검사 로직 추가
   const isValidPosition = (movingItem, allItems, intendedRoomId = null) => {
     if (walls.length === 0 && rooms.length === 0) return true;
     
@@ -171,16 +170,34 @@ const InteriorPlanner = () => {
     );
     if (!isInsideHouse) return false;
 
-    // 벽 관통 충돌 차단
     if (walls.some(w => checkWallCollision(movingItem, w))) return false;
 
-    // 문 회전 반경(부채꼴) 침범 차단
-    const hitsDoorSwing = doors.some(d => {
-      const box = getDoorSwingBox(d);
+    // 💡 문 주변 접근 금지 구역 설정 (회전 반경 + 통행 통로 30px)
+    const hitsDoorSpace = doors.some(d => {
+      const swingBox = getDoorSwingBox(d);
       const eps = 1.0; 
-      return checkCollision(movingItem, { x: box.x + eps, y: box.y + eps, width: box.width - 2*eps, height: box.height - 2*eps });
+      // 1. 회전 반경 부채꼴 체크
+      if (checkCollision(movingItem, { x: swingBox.x + eps, y: swingBox.y + eps, width: swingBox.width - 2*eps, height: swingBox.height - 2*eps })) return true;
+
+      // 2. 문 앞뒤 통행로 확보 (문이 있는 축의 수직 방향으로 30px)
+      const isHorizontal = Math.abs(d.start.y - d.end.y) < Math.abs(d.start.x - d.end.x);
+      let pMinX, pMaxX, pMinY, pMaxY;
+      if (isHorizontal) {
+          pMinX = Math.min(d.start.x, d.end.x) - 5; 
+          pMaxX = Math.max(d.start.x, d.end.x) + 5;
+          pMinY = Math.min(d.start.y, d.end.y) - 30; // 위아래 통로
+          pMaxY = Math.max(d.start.y, d.end.y) + 30;
+      } else {
+          pMinX = Math.min(d.start.x, d.end.x) - 30; // 양옆 통로
+          pMaxX = Math.max(d.start.x, d.end.x) + 30;
+          pMinY = Math.min(d.start.y, d.end.y) - 5;
+          pMaxY = Math.max(d.start.y, d.end.y) + 5;
+      }
+      if (checkCollision(movingItem, { x: pMinX, y: pMinY, width: pMaxX - pMinX, height: pMaxY - pMinY })) return true;
+
+      return false;
     });
-    if (hitsDoorSwing) return false;
+    if (hitsDoorSpace) return false;
 
     const cx = movingItem.x + movingItem.width / 2;
     const cy = movingItem.y + movingItem.height / 2;
@@ -209,7 +226,6 @@ const InteriorPlanner = () => {
       }
     }
 
-    // 다른 가구와 겹침 차단
     return !allItems.some(item => item.id !== movingItem.id && checkCollision(movingItem, item));
   };
 
@@ -292,7 +308,7 @@ const InteriorPlanner = () => {
     if (!placed) alert("벽이나 제한 영역을 피해서 가구를 추가할 공간을 찾지 못했습니다.");
   };
 
-  // --- [AI 추천 알고리즘 수정 (마진 제로화 + 그룹 인식)] ---
+  // --- [AI 추천 알고리즘 수정 (방 모서리 우선 스캔 + 벽 밀착)] ---
   const generateAiRecommendations = () => {
     if (placedFurniture.length === 0) return;
 
@@ -301,7 +317,6 @@ const InteriorPlanner = () => {
       const layoutItems = [];
       const processed = new Set();
 
-      // 1. 잠기지 않은 가구들을 그룹 여부에 따라 합치기(Pack)
       placedFurniture.filter(f => !f.isLocked).forEach(f => {
         if (processed.has(f.id)) return;
         if (f.groupId) {
@@ -310,8 +325,10 @@ const InteriorPlanner = () => {
           const minX = Math.min(...group.map(g => g.x)); const minY = Math.min(...group.map(g => g.y));
           const maxX = Math.max(...group.map(g => g.x + g.width)); const maxY = Math.max(...group.map(g => g.y + g.height));
           layoutItems.push({
-            isGroup: true, items: group.map(g => ({ ...g, offsetX: g.x - minX, offsetY: g.y - minY })),
-            id: 'group-' + f.groupId, name: group[0].name + ' 세트',
+            isGroup: true, 
+            items: group.map(g => ({ ...g, offsetX: g.x - minX, offsetY: g.y - minY })),
+            id: 'group-' + f.groupId, 
+            name: group[0].name + ' 세트',
             x: minX, y: minY, width: maxX - minX, height: maxY - minY,
           });
         } else {
@@ -323,7 +340,7 @@ const InteriorPlanner = () => {
       layoutItems.sort((a, b) => (b.width * b.height) - (a.width * a.height));
 
       const roomCursors = {};
-      rooms.forEach(r => { roomCursors[r.id] = { cx: r.x, cy: r.y, rh: 0 }; }); // Margin 0 반영
+      rooms.forEach(r => { roomCursors[r.id] = { cx: r.x, cy: r.y, rh: 0 }; }); 
 
       const availableRooms = rooms.filter(r => !restrictedRoomTypes.includes(r.name));
       const fallbackRoom = availableRooms.sort((a, b) => (b.width * b.height) - (a.width * a.height))[0] || rooms[0];
@@ -334,25 +351,41 @@ const InteriorPlanner = () => {
           if (fallbackRoom) targetRoom = fallbackRoom;
         }
 
-        if (!targetRoom) { result.push({ ...item }); return; }
+        if (!targetRoom) { 
+          if (item.isGroup) {
+            item.items.forEach(subItem => result.push({ ...subItem }));
+          } else {
+            result.push({ ...item });
+          }
+          return; 
+        }
 
         let placed = false;
         let attempts = 0;
-        const margin = 0; // [요청사항 반영] 벽에 완전히 밀착되도록 마진 0 적용
+        const margin = 0; // 마진 0 (완벽한 벽면 밀착)
+        let finalX = item.x;
+        let finalY = item.y;
+
+        // 💡 스마트 벽면 우선 스캔 배열 (4개 모서리 + 4개 벽면 중앙)
+        const candidates = [
+          { x: targetRoom.x, y: targetRoom.y }, // 좌상단
+          { x: targetRoom.x + targetRoom.width - item.width, y: targetRoom.y }, // 우상단
+          { x: targetRoom.x, y: targetRoom.y + targetRoom.height - item.height }, // 좌하단
+          { x: targetRoom.x + targetRoom.width - item.width, y: targetRoom.y + targetRoom.height - item.height }, // 우하단
+          { x: targetRoom.x + (targetRoom.width - item.width) / 2, y: targetRoom.y }, // 상단 중앙
+          { x: targetRoom.x + (targetRoom.width - item.width) / 2, y: targetRoom.y + targetRoom.height - item.height }, // 하단 중앙
+          { x: targetRoom.x, y: targetRoom.y + (targetRoom.height - item.height) / 2 }, // 좌측 중앙
+          { x: targetRoom.x + targetRoom.width - item.width, y: targetRoom.y + (targetRoom.height - item.height) / 2 } // 우측 중앙
+        ];
 
         while (!placed && attempts < 200) {
           let tx, ty;
           if (type === 'rest') {
-            const cand = [
-              {x: targetRoom.x + margin, y: targetRoom.y + margin}, 
-              {x: targetRoom.x + targetRoom.width - item.width - margin, y: targetRoom.y + margin}, 
-              {x: targetRoom.x + margin, y: targetRoom.y + targetRoom.height - item.height - margin}, 
-              {x: targetRoom.x + targetRoom.width - item.width - margin, y: targetRoom.y + targetRoom.height - item.height - margin}
-            ];
-            if (attempts < 4) { tx = cand[attempts].x; ty = cand[attempts].y; } 
-            else {
-              tx = targetRoom.x + margin + (Math.random() * (targetRoom.width - item.width - margin * 2));
-              ty = targetRoom.y + margin + (Math.random() * (targetRoom.height - item.height - margin * 2));
+            if (attempts < candidates.length) { 
+              tx = candidates[attempts].x; ty = candidates[attempts].y; 
+            } else {
+              tx = targetRoom.x + (Math.random() * (targetRoom.width - item.width));
+              ty = targetRoom.y + (Math.random() * (targetRoom.height - item.height));
             }
           } else { 
             let cursor = roomCursors[targetRoom.id] || { cx: targetRoom.x, cy: targetRoom.y, rh: 0 };
@@ -367,15 +400,8 @@ const InteriorPlanner = () => {
 
           const test = { ...item, x: snap(tx), y: snap(ty) };
           if (isValidPosition(test, result, targetRoom.id)) { 
-            // 2. 그룹 해제 후 최종 배치 결과에 푸시(Unpack)
-            if (item.isGroup) {
-              item.items.forEach(subItem => {
-                result.push({ ...subItem, x: test.x + subItem.offsetX, y: test.y + subItem.offsetY });
-              });
-            } else {
-              delete test.isGroup; result.push(test);
-            }
-
+            finalX = test.x;
+            finalY = test.y;
             if(type === 'grid' && roomCursors[targetRoom.id]) { 
               roomCursors[targetRoom.id].cx += item.width; 
               roomCursors[targetRoom.id].rh = Math.max(roomCursors[targetRoom.id].rh, item.height); 
@@ -387,11 +413,36 @@ const InteriorPlanner = () => {
           }
         }
         
-        if (!placed) { // 실패 시 기존 위치 복구
+        if (!placed) {
+          for (let ty = targetRoom.y; ty <= targetRoom.y + targetRoom.height - item.height; ty += gridSize) {
+            for (let tx = targetRoom.x; tx <= targetRoom.x + targetRoom.width - item.width; tx += gridSize) {
+              const test = { ...item, x: tx, y: ty };
+              if (isValidPosition(test, result, targetRoom.id)) {
+                finalX = test.x;
+                finalY = test.y;
+                placed = true;
+                break;
+              }
+            }
+            if (placed) break;
+          }
+        }
+
+        if (placed) {
+          if (item.isGroup) {
+            item.items.forEach(subItem => {
+              result.push({ ...subItem, x: finalX + subItem.offsetX, y: finalY + subItem.offsetY });
+            });
+          } else {
+            const { isGroup, ...originalItem } = item;
+            result.push({ ...originalItem, x: finalX, y: finalY });
+          }
+        } else {
           if (item.isGroup) {
             item.items.forEach(subItem => result.push({ ...subItem }));
           } else {
-            result.push({ ...item }); 
+            const { isGroup, ...originalItem } = item;
+            result.push({ ...originalItem }); 
           }
         }
       });
@@ -405,7 +456,7 @@ const InteriorPlanner = () => {
     setPreviewAiId('A');
   };
 
-  // --- [이벤트 핸들러] 다중 선택 및 그룹 드래그 로직 적용 ---
+  // --- [이벤트 핸들러] ---
   const handleMouseDown = (e) => {
     const p = getPoint(e);
     setIsDragging(true);
@@ -416,7 +467,7 @@ const InteriorPlanner = () => {
 
     if (activeTab === 'placement' && tool !== 'delete') {
       const clickedFurniture = [...placedFurniture].reverse().find(f => 
-        p.x >= f.x && p.x < f.x + f.width && p.y >= f.y && p.y < f.y + f.height
+        p.x >= f.x && p.x < f.x + f.width && p.y >= f.y && p.y < f.height + f.y
       );
 
       if (clickedFurniture) {
@@ -425,13 +476,13 @@ const InteriorPlanner = () => {
           placedFurniture.filter(f => f.groupId === clickedFurniture.groupId).map(f => f.id) : 
           [clickedFurniture.id];
 
-        if (e.shiftKey) { // Shift 클릭 시 다중 선택 토글
+        if (e.shiftKey) { 
           if (newSelection.includes(clickedFurniture.id)) {
             newSelection = newSelection.filter(id => !groupIdsToSelect.includes(id));
           } else {
             newSelection = [...newSelection, ...groupIdsToSelect];
           }
-        } else { // 일반 클릭 시 단일/그룹 선택
+        } else {
           if (!newSelection.includes(clickedFurniture.id)) {
             newSelection = groupIdsToSelect;
           }
@@ -455,7 +506,6 @@ const InteriorPlanner = () => {
     if (draftRoom) setDraftRoom(prev => ({ ...prev, end: p }));
     if (draftFurniture) setDraftFurniture(prev => ({ ...prev, end: p }));
 
-    // 선택된 여러 가구 동시 이동 (충돌 방지)
     if (selectedFurnitureIds.length > 0 && activeTab === 'placement' && tool !== 'delete') {
       const dx = p.x - dragStartPos.x;
       const dy = p.y - dragStartPos.y;
@@ -491,7 +541,7 @@ const InteriorPlanner = () => {
       const rawW = Math.abs(draftFurniture.start.x - draftFurniture.end.x);
       const rawH = Math.abs(draftFurniture.start.y - draftFurniture.end.y);
       
-      if (rawW > gridSize && rawH > gridSize) {
+      if (rawW >= gridSize && rawH >= gridSize) {
         const x = Math.min(draftFurniture.start.x, draftFurniture.end.x);
         const y = Math.min(draftFurniture.start.y, draftFurniture.end.y);
         
@@ -524,13 +574,12 @@ const InteriorPlanner = () => {
           }
         }
         else if (tool === 'window') setWindows([...windows, { id: Date.now(), start: lineStart, end: p }]);
-        else if (tool === 'door') setDoors([...doors, { id: Date.now(), start: lineStart, end: p, swingSide: 1 }]); // 문 기본 방향 1 설정
+        else if (tool === 'door') setDoors([...doors, { id: Date.now(), start: lineStart, end: p, swingSide: 1 }]);
         setLineStart(null);
       }
     }
   };
 
-  // 토글 제어 (고정, 그룹화)
   const toggleLockFurniture = (ids) => {
     const allLocked = placedFurniture.filter(f => ids.includes(f.id)).every(f => f.isLocked);
     setPlacedFurniture(placedFurniture.map(f => ids.includes(f.id) ? { ...f, isLocked: !allLocked } : f));
@@ -540,9 +589,9 @@ const InteriorPlanner = () => {
     const selectedItems = placedFurniture.filter(f => selectedFurnitureIds.includes(f.id));
     const allSameGroup = selectedItems.every(f => f.groupId && f.groupId === selectedItems[0].groupId);
 
-    if (allSameGroup) { // 그룹 해제
+    if (allSameGroup) { 
       setPlacedFurniture(placedFurniture.map(f => selectedFurnitureIds.includes(f.id) ? { ...f, groupId: null } : f));
-    } else { // 새로운 그룹으로 묶기
+    } else { 
       const newGroupId = Date.now();
       setPlacedFurniture(placedFurniture.map(f => selectedFurnitureIds.includes(f.id) ? { ...f, groupId: newGroupId } : f));
     }
@@ -567,7 +616,7 @@ const InteriorPlanner = () => {
       doors.forEach(d => {
         const box = getDoorSwingBox(d);
         if (checkCollision(f, { x: box.x, y: box.y, width: box.width, height: box.height })) {
-          trafficScore -= 25; // 열림 반경 충돌 감점
+          trafficScore -= 25; 
         }
       });
     });
@@ -619,7 +668,7 @@ const InteriorPlanner = () => {
             {walls.map(w => <line key={w.id} x1={w.start.x} y1={w.start.y} x2={w.end.x} y2={w.end.y} stroke="#1e293b" strokeWidth="8" strokeLinecap="round" style={{ pointerEvents: tool === 'delete' ? 'auto' : 'none' }} onClick={(e) => { if(tool === 'delete') { e.stopPropagation(); setWalls(walls.filter(i=>i.id!==w.id)); } }} />)}
             {windows.map(w => <line key={w.id} x1={w.start.x} y1={w.start.y} x2={w.end.x} y2={w.end.y} stroke="#38bdf8" strokeWidth="12" strokeLinecap="square" style={{ pointerEvents: tool === 'delete' ? 'auto' : 'none' }} onClick={(e) => { if(tool === 'delete') { e.stopPropagation(); setWindows(windows.filter(i=>i.id!==w.id)); } }} />)}
             
-            {/* [NEW] 문의 열림 반경 시각화 */}
+            {/* 문의 열림 방향 및 반경 표시 */}
             {doors.map(d => {
               const dx = d.end.x - d.start.x; const dy = d.end.y - d.start.y;
               const r = Math.hypot(dx, dy); const theta = Math.atan2(dy, dx);
@@ -673,7 +722,7 @@ const InteriorPlanner = () => {
           {activeTab === 'editor' ? (
             <div style={{ padding: '24px', backgroundColor: '#fff', borderRadius: '24px', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.05)' }}>
               <h3 style={{ fontWeight: '900', marginBottom: '20px' }}>도면 도구</h3>
-              <p style={{ fontSize: '11px', color: '#6b7280', marginBottom: '12px' }}>💡 생성된 문을 클릭하면 열림 방향이 뒤집힙니다.</p>
+              <p style={{ fontSize: '11px', color: '#6b7280', marginBottom: '12px' }}>💡 문을 클릭하면 열림 방향이 반대로 바뀝니다.</p>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 <button onClick={() => setTool('wall')} style={{ width: '100%', padding: '14px', borderRadius: '12px', fontWeight: 'bold', border: 'none', backgroundColor: tool === 'wall' ? '#6366f1' : '#f1f5f9', color: tool === 'wall' ? '#fff' : '#64748b', cursor: 'pointer' }}>벽 설치</button>
                 <button onClick={() => setTool('room')} style={{ width: '100%', padding: '14px', borderRadius: '12px', fontWeight: 'bold', border: 'none', backgroundColor: tool === 'room' ? '#6366f1' : '#f1f5f9', color: tool === 'room' ? '#fff' : '#64748b', cursor: 'pointer' }}>방 영역 지정</button>
@@ -719,7 +768,6 @@ const InteriorPlanner = () => {
             <div style={{ padding: '24px', backgroundColor: '#fff', borderRadius: '24px', border: '1px solid #e5e7eb' }}>
               <h3 style={{ fontWeight: '900', marginBottom: '16px' }}>가구 관리</h3>
               
-              {/* [NEW] 다중 선택 가구 제어 패널 */}
               {selectedFurnitureIds.length > 0 && (
                 <div style={{ backgroundColor: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '14px', marginBottom: '16px' }}>
                   <p style={{ margin: '0 0 10px 0', fontSize: '13px', fontWeight: 'bold', color: '#1f2937' }}>
@@ -730,7 +778,7 @@ const InteriorPlanner = () => {
                     <button 
                       onClick={toggleGroupFurniture} 
                       style={{ width: '100%', padding: '10px', marginBottom: '10px', backgroundColor: '#4f46e5', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' }}>
-                      🔗 선택한 가구 그룹으로 묶기 / 해제
+                      🔗 선택한 가구 그룹 묶기 / 해제
                     </button>
                   )}
 
@@ -743,7 +791,7 @@ const InteriorPlanner = () => {
                     />
                     📌 위치 고정 (AI 무시)
                   </label>
-                  <p style={{ margin: '6px 0 0 0', fontSize: '11px', color: '#9ca3af' }}>💡 Shift 키를 누른 채 클릭하여 다중 선택이 가능합니다.</p>
+                  <p style={{ margin: '6px 0 0 0', fontSize: '11px', color: '#9ca3af' }}>💡 Shift 키를 누른 채 클릭하여 다중 선택 가능</p>
                 </div>
               )}
 
