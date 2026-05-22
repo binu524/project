@@ -1,11 +1,40 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
+
+// --- [가구 표준 사이즈 프리셋 (단위: cm)] ---
+const FURNITURE_PRESETS = {
+  '침대': {
+    '싱글 (100x200)': { w: 100, h: 200 },
+    '슈퍼싱글 (110x200)': { w: 110, h: 200 },
+    '퀸 (150x200)': { w: 150, h: 200 },
+    '킹 (160x200)': { w: 160, h: 200 }
+  },
+  '책상': {
+    '1인용 소형 (80x60)': { w: 80, h: 60 },
+    '표준형 (120x60)': { w: 120, h: 60 },
+    '넓은형 (160x80)': { w: 160, h: 80 }
+  },
+  '식탁': {
+    '2인용 (80x80)': { w: 80, h: 80 },
+    '4인용 (120x80)': { w: 120, h: 80 },
+    '6인용 (160x80)': { w: 160, h: 80 }
+  },
+  '소파': {
+    '2인용 (140x90)': { w: 140, h: 90 },
+    '3인용 (200x90)': { w: 200, h: 90 },
+    '4인용 (260x90)': { w: 260, h: 90 },
+    '카우치형 (300x150)': { w: 300, h: 150 }
+  },
+  '의자': {
+    '일반 의자 (50x50)': { w: 50, h: 50 },
+    '1인용 안락의자 (80x80)': { w: 80, h: 80 }
+  }
+};
 
 const InteriorPlanner = () => {
   const roomCanvas = { width: 900, height: 560 };
   const gridSize = 20;
   const [activeTab, setActiveTab] = useState('editor'); 
   
-  // --- [상태 관리] ---
   const [tool, setTool] = useState('wall'); 
   const [walls, setWalls] = useState([]);
   const [rooms, setRooms] = useState([]);
@@ -18,39 +47,44 @@ const InteriorPlanner = () => {
   const [draftFurniture, setDraftFurniture] = useState(null); 
   const [isDragging, setIsDragging] = useState(false);
 
-  // --- [배율(Scale) 시스템 상태] ---
   const [pxPerMeter, setPxPerMeter] = useState(20); 
   const [isScaleSet, setIsScaleSet] = useState(false);
   const [showScaleModal, setShowScaleModal] = useState(false);
   const [pendingWallLengthPx, setPendingWallLengthPx] = useState(0);
 
-  // 방 정보 모달 상태
   const [showRoomModal, setShowRoomModal] = useState(false);
   const [pendingRoom, setPendingRoom] = useState(null);
   const [roomType, setRoomType] = useState('거실');
   const [customRoomType, setCustomRoomType] = useState('');
   const [roomAreaInput, setRoomAreaInput] = useState('');
 
-  // 가구 관련 상태
   const [furnitureTypeInput, setFurnitureTypeInput] = useState('침대');
+  const [furnitureSubtypeInput, setFurnitureSubtypeInput] = useState('슈퍼싱글 (110x200)');
+  const [customFurnitureSize, setCustomFurnitureSize] = useState({ w: 120, h: 60 }); 
   const [customFurnitureName, setCustomFurnitureName] = useState('');
   const [furnitureColorInput, setFurnitureColorInput] = useState('#93c5fd');
   const [placedFurniture, setPlacedFurniture] = useState([]);
   
-  // 다중 선택 및 드래그 상태
+  const [isRotatedPreset, setIsRotatedPreset] = useState(false);
+  
+  useEffect(() => {
+    if (FURNITURE_PRESETS[furnitureTypeInput]) {
+      setFurnitureSubtypeInput(Object.keys(FURNITURE_PRESETS[furnitureTypeInput])[0]);
+    } else {
+      setFurnitureSubtypeInput('직접입력');
+    }
+  }, [furnitureTypeInput]);
+
   const [selectedFurnitureIds, setSelectedFurnitureIds] = useState([]);
   const [dragStartPos, setDragStartPos] = useState({ x: 0, y: 0 });
   const [dragInitialFurniture, setDragInitialFurniture] = useState([]);
   
-  // AI 추천 상태
   const [aiRecommendations, setAiRecommendations] = useState([]);
   const [previewAiId, setPreviewAiId] = useState(null);
   const nextIdRef = useRef(Date.now());
 
-  // AI 가구 자동 추천에서 제외할 방 유형 정의
   const restrictedRoomTypes = ['욕실', '현관'];
 
-  // --- [유틸리티] ---
   const snap = (value) => Math.round(value / gridSize) * gridSize;
   const getPoint = (evt) => {
     const rect = evt.currentTarget.getBoundingClientRect();
@@ -95,7 +129,6 @@ const InteriorPlanner = () => {
     r1.y < r2.y + r2.height && r1.y + r1.height > r2.y
   );
 
-  // 선분(벽)-사각형 교차 알고리즘
   const checkWallCollision = (furniture, wall) => {
     const eps = 0.5;
     const fLeft = furniture.x + eps; const fRight = furniture.x + furniture.width - eps;
@@ -140,7 +173,6 @@ const InteriorPlanner = () => {
     return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
   };
 
-  // [강화됨] 문 통행로 및 회전 반경 침범 검사 로직 추가
   const isValidPosition = (movingItem, allItems, intendedRoomId = null) => {
     if (walls.length === 0 && rooms.length === 0) return true;
     
@@ -172,23 +204,20 @@ const InteriorPlanner = () => {
 
     if (walls.some(w => checkWallCollision(movingItem, w))) return false;
 
-    // 💡 문 주변 접근 금지 구역 설정 (회전 반경 + 통행 통로 30px)
     const hitsDoorSpace = doors.some(d => {
       const swingBox = getDoorSwingBox(d);
       const eps = 1.0; 
-      // 1. 회전 반경 부채꼴 체크
       if (checkCollision(movingItem, { x: swingBox.x + eps, y: swingBox.y + eps, width: swingBox.width - 2*eps, height: swingBox.height - 2*eps })) return true;
 
-      // 2. 문 앞뒤 통행로 확보 (문이 있는 축의 수직 방향으로 30px)
       const isHorizontal = Math.abs(d.start.y - d.end.y) < Math.abs(d.start.x - d.end.x);
       let pMinX, pMaxX, pMinY, pMaxY;
       if (isHorizontal) {
           pMinX = Math.min(d.start.x, d.end.x) - 5; 
           pMaxX = Math.max(d.start.x, d.end.x) + 5;
-          pMinY = Math.min(d.start.y, d.end.y) - 30; // 위아래 통로
+          pMinY = Math.min(d.start.y, d.end.y) - 30;
           pMaxY = Math.max(d.start.y, d.end.y) + 30;
       } else {
-          pMinX = Math.min(d.start.x, d.end.x) - 30; // 양옆 통로
+          pMinX = Math.min(d.start.x, d.end.x) - 30;
           pMaxX = Math.max(d.start.x, d.end.x) + 30;
           pMinY = Math.min(d.start.y, d.end.y) - 5;
           pMaxY = Math.max(d.start.y, d.end.y) + 5;
@@ -270,6 +299,16 @@ const InteriorPlanner = () => {
     }
   };
 
+  const rotateSelectedFurniture = () => {
+    setPlacedFurniture(prev => prev.map(f => {
+      if (selectedFurnitureIds.includes(f.id)) {
+        return { ...f, width: f.height, height: f.width };
+      }
+      return f;
+    }));
+  };
+
+  // 💡 방 중앙부터 스캔하여 배치하는 똑똑한 로직으로 변경
   const handleAddFurnitureClick = () => {
     let targetBox = { x: 40, y: 40, width: roomCanvas.width - 80, height: roomCanvas.height - 80 };
     const validRooms = rooms.filter(r => !restrictedRoomTypes.includes(r.name));
@@ -287,15 +326,42 @@ const InteriorPlanner = () => {
     }
     
     const furnitureName = furnitureTypeInput === '기타' ? (customFurnitureName || '기타') : furnitureTypeInput;
+    
+    let cmW = 100, cmH = 80;
+    if (furnitureSubtypeInput === '직접입력') {
+      cmW = customFurnitureSize.w;
+      cmH = customFurnitureSize.h;
+    } else if (FURNITURE_PRESETS[furnitureTypeInput]) {
+      const preset = FURNITURE_PRESETS[furnitureTypeInput][furnitureSubtypeInput];
+      if (preset) {
+        cmW = isRotatedPreset ? preset.h : preset.w;
+        cmH = isRotatedPreset ? preset.w : preset.h;
+      }
+    }
+
+    const pixelWidth = Math.round((cmW / 100) * pxPerMeter);
+    const pixelHeight = Math.round((cmH / 100) * pxPerMeter);
+
     const newItem = { 
       id: ++nextIdRef.current, name: furnitureName, 
-      x: 0, y: 0, width: 100, height: 80, color: furnitureColorInput, isLocked: false 
+      x: 0, y: 0, width: pixelWidth, height: pixelHeight, color: furnitureColorInput, isLocked: false 
     };
 
     let placed = false;
-    for (let ty = targetBox.y; ty <= targetBox.y + targetBox.height - newItem.height; ty += 10) {
-      for (let tx = targetBox.x; tx <= targetBox.x + targetBox.width - newItem.width; tx += 10) {
-        const testItem = { ...newItem, x: snap(tx), y: snap(ty) };
+    
+    // 💡 구석이 아닌 '정중앙' 계산
+    const centerX = snap(targetBox.x + targetBox.width / 2 - newItem.width / 2);
+    const centerY = snap(targetBox.y + targetBox.height / 2 - newItem.height / 2);
+    
+    // 💡 정중앙부터 나선형(원형)으로 퍼져나가며 빈 공간 스캔
+    const maxRadius = Math.max(targetBox.width, targetBox.height);
+    for (let radius = 0; radius < maxRadius; radius += gridSize) {
+      for (let angle = 0; angle < 360; angle += 45) {
+        const rad = angle * Math.PI / 180;
+        const tx = snap(centerX + radius * Math.cos(rad));
+        const ty = snap(centerY + radius * Math.sin(rad));
+        
+        const testItem = { ...newItem, x: tx, y: ty };
         if (isValidPosition(testItem, placedFurniture)) {
           setPlacedFurniture([...placedFurniture, testItem]);
           placed = true;
@@ -305,10 +371,10 @@ const InteriorPlanner = () => {
       if (placed) break;
     }
 
-    if (!placed) alert("벽이나 제한 영역을 피해서 가구를 추가할 공간을 찾지 못했습니다.");
+    if (!placed) alert("가구를 추가할 빈 공간을 찾지 못했습니다. 기존 가구를 이동시키거나 도면의 빈 공간을 직접 클릭해 추가해 보세요.");
   };
 
-  // --- [AI 추천 알고리즘 수정 (방 모서리 우선 스캔 + 벽 밀착)] ---
+  // 💡 AI 배치 알고리즘 전면 개편 (공간 여유도/밀집도 점수 기반 그리드 스캔)
   const generateAiRecommendations = () => {
     if (placedFurniture.length === 0) return;
 
@@ -337,10 +403,8 @@ const InteriorPlanner = () => {
         }
       });
 
+      // 면적이 큰 가구부터 먼저 자리잡게 정렬
       layoutItems.sort((a, b) => (b.width * b.height) - (a.width * a.height));
-
-      const roomCursors = {};
-      rooms.forEach(r => { roomCursors[r.id] = { cx: r.x, cy: r.y, rh: 0 }; }); 
 
       const availableRooms = rooms.filter(r => !restrictedRoomTypes.includes(r.name));
       const fallbackRoom = availableRooms.sort((a, b) => (b.width * b.height) - (a.width * a.height))[0] || rooms[0];
@@ -352,95 +416,69 @@ const InteriorPlanner = () => {
         }
 
         if (!targetRoom) { 
-          if (item.isGroup) {
-            item.items.forEach(subItem => result.push({ ...subItem }));
-          } else {
-            result.push({ ...item });
-          }
+          if (item.isGroup) item.items.forEach(subItem => result.push({ ...subItem }));
+          else result.push({ ...item });
           return; 
         }
 
-        let placed = false;
-        let attempts = 0;
-        const margin = 0; // 마진 0 (완벽한 벽면 밀착)
-        let finalX = item.x;
-        let finalY = item.y;
+        let bestPos = null;
+        let maxScore = -99999;
 
-        // 💡 스마트 벽면 우선 스캔 배열 (4개 모서리 + 4개 벽면 중앙)
-        const candidates = [
-          { x: targetRoom.x, y: targetRoom.y }, // 좌상단
-          { x: targetRoom.x + targetRoom.width - item.width, y: targetRoom.y }, // 우상단
-          { x: targetRoom.x, y: targetRoom.y + targetRoom.height - item.height }, // 좌하단
-          { x: targetRoom.x + targetRoom.width - item.width, y: targetRoom.y + targetRoom.height - item.height }, // 우하단
-          { x: targetRoom.x + (targetRoom.width - item.width) / 2, y: targetRoom.y }, // 상단 중앙
-          { x: targetRoom.x + (targetRoom.width - item.width) / 2, y: targetRoom.y + targetRoom.height - item.height }, // 하단 중앙
-          { x: targetRoom.x, y: targetRoom.y + (targetRoom.height - item.height) / 2 }, // 좌측 중앙
-          { x: targetRoom.x + targetRoom.width - item.width, y: targetRoom.y + (targetRoom.height - item.height) / 2 } // 우측 중앙
-        ];
+        // 💡 방 전체를 20px 단위 그리드로 촘촘하게 스캔
+        for (let ty = targetRoom.y; ty <= targetRoom.y + targetRoom.height - item.height; ty += gridSize) {
+          for (let tx = targetRoom.x; tx <= targetRoom.x + targetRoom.width - item.width; tx += gridSize) {
+            const test = { ...item, x: tx, y: ty };
+            
+            if (isValidPosition(test, result, targetRoom.id)) {
+              // 1. 다른 가구들과의 최소 거리 계산 (구석에 뭉치는 것 방지)
+              let minDistToOthers = 9999;
+              result.forEach(other => {
+                const dx = (tx + item.width/2) - (other.x + other.width/2);
+                const dy = (ty + item.height/2) - (other.y + other.height/2);
+                const dist = Math.hypot(dx, dy);
+                if (dist < minDistToOthers) minDistToOthers = dist;
+              });
+              if (result.length === 0) minDistToOthers = 500;
 
-        while (!placed && attempts < 200) {
-          let tx, ty;
-          if (type === 'rest') {
-            if (attempts < candidates.length) { 
-              tx = candidates[attempts].x; ty = candidates[attempts].y; 
-            } else {
-              tx = targetRoom.x + (Math.random() * (targetRoom.width - item.width));
-              ty = targetRoom.y + (Math.random() * (targetRoom.height - item.height));
-            }
-          } else { 
-            let cursor = roomCursors[targetRoom.id] || { cx: targetRoom.x, cy: targetRoom.y, rh: 0 };
-            tx = cursor.cx; ty = cursor.cy;
-            if (cursor.cx + item.width > targetRoom.x + targetRoom.width) { 
-              cursor.cx = targetRoom.x; 
-              cursor.cy += cursor.rh; 
-              cursor.rh = 0; 
-              tx = cursor.cx; ty = cursor.cy;
-            }
-          }
+              // 2. 벽(방 경계선)과의 거리 계산
+              const distToWall = Math.min(
+                tx - targetRoom.x, 
+                ty - targetRoom.y,
+                (targetRoom.x + targetRoom.width) - (tx + item.width),
+                (targetRoom.y + targetRoom.height) - (ty + item.height)
+              );
 
-          const test = { ...item, x: snap(tx), y: snap(ty) };
-          if (isValidPosition(test, result, targetRoom.id)) { 
-            finalX = test.x;
-            finalY = test.y;
-            if(type === 'grid' && roomCursors[targetRoom.id]) { 
-              roomCursors[targetRoom.id].cx += item.width; 
-              roomCursors[targetRoom.id].rh = Math.max(roomCursors[targetRoom.id].rh, item.height); 
-            }
-            placed = true; 
-          } else { 
-            if(type === 'grid' && roomCursors[targetRoom.id]) roomCursors[targetRoom.id].cx += gridSize;
-            attempts++; 
-          }
-        }
-        
-        if (!placed) {
-          for (let ty = targetRoom.y; ty <= targetRoom.y + targetRoom.height - item.height; ty += gridSize) {
-            for (let tx = targetRoom.x; tx <= targetRoom.x + targetRoom.width - item.width; tx += gridSize) {
-              const test = { ...item, x: tx, y: ty };
-              if (isValidPosition(test, result, targetRoom.id)) {
-                finalX = test.x;
-                finalY = test.y;
-                placed = true;
-                break;
+              let score = 0;
+              if (type === 'rest') {
+                // A안 (안정감): 벽에는 적당히 밀착하되(음수 패널티), 다른 가구와는 거리를 벌리기
+                score = (-distToWall * 1.5) + minDistToOthers;
+              } else {
+                // B안 (여유 공간): 공간 한가운데를 넓게 쓰며 가구끼리 멀찌감치 띄워놓기
+                score = distToWall + (minDistToOthers * 2.5);
+              }
+
+              // 가장 높은 점수를 받은 명당 자리 기록
+              if (score > maxScore) {
+                maxScore = score;
+                bestPos = { x: tx, y: ty };
               }
             }
-            if (placed) break;
           }
         }
 
-        if (placed) {
+        if (bestPos) {
           if (item.isGroup) {
             item.items.forEach(subItem => {
-              result.push({ ...subItem, x: finalX + subItem.offsetX, y: finalY + subItem.offsetY });
+              result.push({ ...subItem, x: bestPos.x + subItem.offsetX, y: bestPos.y + subItem.offsetY });
             });
           } else {
             const { isGroup, ...originalItem } = item;
-            result.push({ ...originalItem, x: finalX, y: finalY });
+            result.push({ ...originalItem, x: bestPos.x, y: bestPos.y });
           }
         } else {
-          if (item.isGroup) {
-            item.items.forEach(subItem => result.push({ ...subItem }));
-          } else {
+          // 자리 찾기 실패 시 제자리 유지
+          if (item.isGroup) item.items.forEach(subItem => result.push({ ...subItem }));
+          else {
             const { isGroup, ...originalItem } = item;
             result.push({ ...originalItem }); 
           }
@@ -450,13 +488,12 @@ const InteriorPlanner = () => {
     };
     
     setAiRecommendations([
-      { id: 'A', name: '추천안 A (벽면 회피 안전 밀착)', score: 88, items: generateLayout('rest') },
-      { id: 'B', name: '추천안 B (정렬 최적화 배치)', score: 94, items: generateLayout('grid') }
+      { id: 'A', name: '추천안 A (벽면 정렬 및 간격 확보)', score: 88, items: generateLayout('rest') },
+      { id: 'B', name: '추천안 B (여유로운 중앙 공간 확보)', score: 94, items: generateLayout('grid') }
     ]);
     setPreviewAiId('A');
   };
 
-  // --- [이벤트 핸들러] ---
   const handleMouseDown = (e) => {
     const p = getPoint(e);
     setIsDragging(true);
@@ -541,17 +578,34 @@ const InteriorPlanner = () => {
       const rawW = Math.abs(draftFurniture.start.x - draftFurniture.end.x);
       const rawH = Math.abs(draftFurniture.start.y - draftFurniture.end.y);
       
-      if (rawW >= gridSize && rawH >= gridSize) {
-        const x = Math.min(draftFurniture.start.x, draftFurniture.end.x);
-        const y = Math.min(draftFurniture.start.y, draftFurniture.end.y);
-        
-        const furnitureName = furnitureTypeInput === '기타' ? (customFurnitureName || '기타') : furnitureTypeInput;
-        const newItem = { id: ++nextIdRef.current, name: furnitureName, x, y, width: snap(rawW), height: snap(rawH), color: furnitureColorInput, isLocked: false };
-        
-        if (isValidPosition(newItem, placedFurniture)) {
-          setPlacedFurniture([...placedFurniture, newItem]);
-          setSelectedFurnitureIds([newItem.id]);
+      let cmW = 100, cmH = 80;
+      let isDragSize = false;
+
+      if (furnitureSubtypeInput === '직접입력' && rawW >= gridSize && rawH >= gridSize) {
+        isDragSize = true;
+      } else if (furnitureSubtypeInput === '직접입력') {
+        cmW = customFurnitureSize.w;
+        cmH = customFurnitureSize.h;
+      } else if (FURNITURE_PRESETS[furnitureTypeInput]) {
+        const preset = FURNITURE_PRESETS[furnitureTypeInput][furnitureSubtypeInput];
+        if (preset) {
+          cmW = isRotatedPreset ? preset.h : preset.w;
+          cmH = isRotatedPreset ? preset.w : preset.h;
         }
+      }
+
+      const pixelWidth = isDragSize ? snap(rawW) : Math.round((cmW / 100) * pxPerMeter);
+      const pixelHeight = isDragSize ? snap(rawH) : Math.round((cmH / 100) * pxPerMeter);
+
+      const spawnX = isDragSize ? Math.min(draftFurniture.start.x, draftFurniture.end.x) : snap(draftFurniture.end.x);
+      const spawnY = isDragSize ? Math.min(draftFurniture.start.y, draftFurniture.end.y) : snap(draftFurniture.end.y);
+      
+      const furnitureName = furnitureTypeInput === '기타' ? (customFurnitureName || '기타') : furnitureTypeInput;
+      const newItem = { id: ++nextIdRef.current, name: furnitureName, x: spawnX, y: spawnY, width: pixelWidth, height: pixelHeight, color: furnitureColorInput, isLocked: false };
+      
+      if (isValidPosition(newItem, placedFurniture)) {
+        setPlacedFurniture([...placedFurniture, newItem]);
+        setSelectedFurnitureIds([newItem.id]);
       }
     }
     
@@ -659,16 +713,18 @@ const InteriorPlanner = () => {
             
             {rooms.map(r => (
               <g key={r.id}>
-                <rect x={r.x} y={r.y} width={r.width} height={r.height} fill={activeTab === 'editor' ? "#60a5fa11" : "#fff"} stroke="#3b82f6" strokeWidth="2" style={{ pointerEvents: tool === 'delete' ? 'auto' : 'none' }} onClick={(e) => { if(tool === 'delete') { e.stopPropagation(); setRooms(rooms.filter(i => i.id !== r.id)); } }} />
+                <rect x={r.x} y={r.y} width={r.width} height={r.height} fill={activeTab === 'editor' ? "#60a5fa11" : "#fff"} stroke="#3b82f6" strokeWidth="2" 
+                  style={{ pointerEvents: (tool === 'delete' && activeTab === 'editor') ? 'auto' : 'none' }} 
+                  onClick={(e) => { if(tool === 'delete' && activeTab === 'editor') { e.stopPropagation(); setRooms(rooms.filter(i => i.id !== r.id)); } }} 
+                />
                 <text x={r.x + 8} y={r.y + 25} fontSize="14" fontWeight="bold" fill="#1e293b">{r.name}</text>
                 <text x={r.x + 8} y={r.y + 45} fontSize="12" fill="#64748b">{r.pyeong}평</text>
               </g>
             ))}
             
-            {walls.map(w => <line key={w.id} x1={w.start.x} y1={w.start.y} x2={w.end.x} y2={w.end.y} stroke="#1e293b" strokeWidth="8" strokeLinecap="round" style={{ pointerEvents: tool === 'delete' ? 'auto' : 'none' }} onClick={(e) => { if(tool === 'delete') { e.stopPropagation(); setWalls(walls.filter(i=>i.id!==w.id)); } }} />)}
-            {windows.map(w => <line key={w.id} x1={w.start.x} y1={w.start.y} x2={w.end.x} y2={w.end.y} stroke="#38bdf8" strokeWidth="12" strokeLinecap="square" style={{ pointerEvents: tool === 'delete' ? 'auto' : 'none' }} onClick={(e) => { if(tool === 'delete') { e.stopPropagation(); setWindows(windows.filter(i=>i.id!==w.id)); } }} />)}
+            {walls.map(w => <line key={w.id} x1={w.start.x} y1={w.start.y} x2={w.end.x} y2={w.end.y} stroke="#1e293b" strokeWidth="8" strokeLinecap="round" style={{ pointerEvents: (tool === 'delete' && activeTab === 'editor') ? 'auto' : 'none' }} onClick={(e) => { if(tool === 'delete' && activeTab === 'editor') { e.stopPropagation(); setWalls(walls.filter(i=>i.id!==w.id)); } }} />)}
+            {windows.map(w => <line key={w.id} x1={w.start.x} y1={w.start.y} x2={w.end.x} y2={w.end.y} stroke="#38bdf8" strokeWidth="12" strokeLinecap="square" style={{ pointerEvents: (tool === 'delete' && activeTab === 'editor') ? 'auto' : 'none' }} onClick={(e) => { if(tool === 'delete' && activeTab === 'editor') { e.stopPropagation(); setWindows(windows.filter(i=>i.id!==w.id)); } }} />)}
             
-            {/* 문의 열림 방향 및 반경 표시 */}
             {doors.map(d => {
               const dx = d.end.x - d.start.x; const dy = d.end.y - d.start.y;
               const r = Math.hypot(dx, dy); const theta = Math.atan2(dy, dx);
@@ -681,10 +737,10 @@ const InteriorPlanner = () => {
                 <g key={d.id} 
                    onClick={(e) => {
                      e.stopPropagation();
-                     if (tool === 'delete') setDoors(doors.filter(i => i.id !== d.id));
+                     if (tool === 'delete' && activeTab === 'editor') setDoors(doors.filter(i => i.id !== d.id));
                      else if (activeTab === 'editor') setDoors(doors.map(i => i.id === d.id ? { ...i, swingSide: side * -1 } : i));
                    }}
-                   style={{ pointerEvents: 'auto', cursor: activeTab === 'editor' ? 'pointer' : 'default' }}>
+                   style={{ pointerEvents: activeTab === 'editor' ? 'auto' : 'none', cursor: activeTab === 'editor' ? 'pointer' : 'default' }}>
                   <path d={`M ${d.start.x} ${d.start.y} L ${d.end.x} ${d.end.y} A ${r} ${r} 0 0 ${sweep} ${ox} ${oy} Z`} fill="rgba(180, 83, 9, 0.15)" stroke="none" />
                   <line x1={d.start.x} y1={d.start.y} x2={d.end.x} y2={d.end.y} stroke="#b45309" strokeWidth="10" strokeLinecap="round" />
                 </g>
@@ -692,22 +748,32 @@ const InteriorPlanner = () => {
             })}
             
             {draftRoom && <rect x={Math.min(draftRoom.start.x, draftRoom.end.x)} y={Math.min(draftRoom.start.y, draftRoom.end.y)} width={Math.abs(draftRoom.start.x-draftRoom.end.x)} height={Math.abs(draftRoom.start.y-draftRoom.end.y)} fill="rgba(59, 130, 246, 0.3)" stroke="#2563eb" strokeWidth="2" strokeDasharray="8 4" />}
-            {draftFurniture && selectedFurnitureIds.length === 0 && <rect x={Math.min(draftFurniture.start.x, draftFurniture.end.x)} y={Math.min(draftFurniture.start.y, draftFurniture.end.y)} width={Math.abs(draftFurniture.start.x-draftFurniture.end.x)} height={Math.abs(draftFurniture.start.y-draftFurniture.end.y)} fill={furnitureColorInput + '66'} stroke="#334155" strokeDasharray="4 4" />}
+            
+            {draftFurniture && selectedFurnitureIds.length === 0 && furnitureSubtypeInput === '직접입력' && (
+              <rect x={Math.min(draftFurniture.start.x, draftFurniture.end.x)} y={Math.min(draftFurniture.start.y, draftFurniture.end.y)} width={Math.abs(draftFurniture.start.x-draftFurniture.end.x)} height={Math.abs(draftFurniture.start.y-draftFurniture.end.y)} fill={furnitureColorInput + '66'} stroke="#334155" strokeDasharray="4 4" />
+            )}
+
             {lineStart && <line x1={lineStart.x} y1={lineStart.y} x2={mousePos.x} y2={mousePos.y} stroke="#ef4444" strokeWidth="2" strokeDasharray="6 4" />}
             
             {(activeTab === 'placement' || activeTab === 'results') && placedFurniture.map(f => {
               const isSelected = selectedFurnitureIds.includes(f.id);
+              const actualCmW = Math.round((f.width / pxPerMeter) * 100);
+              const actualCmH = Math.round((f.height / pxPerMeter) * 100);
               return (
                 <g key={f.id} onMouseDown={(e) => { 
-                  if (tool === 'delete') { 
+                  if (tool === 'delete' && activeTab === 'placement') { 
                     e.stopPropagation(); 
                     setPlacedFurniture(placedFurniture.filter(i=>i.id!==f.id)); 
                     setSelectedFurnitureIds(prev => prev.filter(id => id !== f.id));
+                    setTool('select'); 
                   }
                 }}>
-                  <rect x={f.x} y={f.y} width={f.width} height={f.height} fill={f.color} stroke={isSelected ? '#6366f1' : '#475569'} strokeWidth={isSelected ? "4" : "2"} rx="6" style={{ cursor: tool !== 'delete' ? 'grab' : 'pointer' }} />
+                  <rect x={f.x} y={f.y} width={f.width} height={f.height} fill={f.color} stroke={isSelected ? '#6366f1' : '#475569'} strokeWidth={isSelected ? "4" : "2"} rx="6" style={{ cursor: tool === 'delete' ? 'pointer' : 'grab' }} />
                   <text x={f.x+5} y={f.y+18} fontSize="12" fontWeight="bold" fill="#1e293b" style={{ pointerEvents: 'none' }}>
                     {f.isLocked ? '📌 ' : ''}{f.groupId ? '🔗 ' : ''}{f.name}
+                  </text>
+                  <text x={f.x+5} y={f.y+32} fontSize="10" fill="#334155" style={{ pointerEvents: 'none' }}>
+                    {actualCmW}x{actualCmH}cm
                   </text>
                 </g>
               );
@@ -724,8 +790,8 @@ const InteriorPlanner = () => {
               <h3 style={{ fontWeight: '900', marginBottom: '20px' }}>도면 도구</h3>
               <p style={{ fontSize: '11px', color: '#6b7280', marginBottom: '12px' }}>💡 문을 클릭하면 열림 방향이 반대로 바뀝니다.</p>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                <button onClick={() => setTool('wall')} style={{ width: '100%', padding: '14px', borderRadius: '12px', fontWeight: 'bold', border: 'none', backgroundColor: tool === 'wall' ? '#6366f1' : '#f1f5f9', color: tool === 'wall' ? '#fff' : '#64748b', cursor: 'pointer' }}>벽 설치</button>
-                <button onClick={() => setTool('room')} style={{ width: '100%', padding: '14px', borderRadius: '12px', fontWeight: 'bold', border: 'none', backgroundColor: tool === 'room' ? '#6366f1' : '#f1f5f9', color: tool === 'room' ? '#fff' : '#64748b', cursor: 'pointer' }}>방 영역 지정</button>
+                <button onClick={() => setTool('wall')} style={{ width: '100%', padding: '14px', borderRadius: '12px', fontWeight: 'bold', border: 'none', backgroundColor: tool === 'wall' ? '#6366f1' : '#f1f5f9', color: tool === 'wall' ? '#fff' : '#64748b', cursor: 'pointer' }}>벽 설치 (물리적 차단)</button>
+                <button onClick={() => setTool('room')} style={{ width: '100%', padding: '14px', borderRadius: '12px', fontWeight: 'bold', border: 'none', backgroundColor: tool === 'room' ? '#6366f1' : '#f1f5f9', color: tool === 'room' ? '#fff' : '#64748b', cursor: 'pointer' }}>방 영역 지정 (가상선)</button>
                 <button onClick={() => setTool('window')} style={{ width: '100%', padding: '14px', borderRadius: '12px', fontWeight: 'bold', border: 'none', backgroundColor: tool === 'window' ? '#0ea5e9' : '#f1f5f9', color: tool === 'window' ? '#fff' : '#64748b', cursor: 'pointer' }}>창문 설치</button>
                 <button onClick={() => setTool('door')} style={{ width: '100%', padding: '14px', borderRadius: '12px', fontWeight: 'bold', border: 'none', backgroundColor: tool === 'door' ? '#b45309' : '#f1f5f9', color: tool === 'door' ? '#fff' : '#64748b', cursor: 'pointer' }}>문 설치</button>
                 <button onClick={() => setTool('delete')} style={{ width: '100%', padding: '14px', borderRadius: '12px', fontWeight: 'bold', border: 'none', backgroundColor: tool === 'delete' ? '#ef4444' : '#f1f5f9', color: tool === 'delete' ? '#fff' : '#64748b', cursor: 'pointer' }}>지우개 모드</button>
@@ -774,6 +840,12 @@ const InteriorPlanner = () => {
                     선택된 가구: <span style={{ color: '#4f46e5' }}>{selectedFurnitureIds.length}개</span>
                   </p>
 
+                  <button 
+                    onClick={rotateSelectedFurniture} 
+                    style={{ width: '100%', padding: '10px', marginBottom: '10px', backgroundColor: '#0ea5e9', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' }}>
+                    🔄 선택한 가구 90도 회전
+                  </button>
+
                   {selectedFurnitureIds.length > 1 && (
                     <button 
                       onClick={toggleGroupFurniture} 
@@ -789,29 +861,66 @@ const InteriorPlanner = () => {
                       onChange={() => toggleLockFurniture(selectedFurnitureIds)}
                       style={{ width: '16px', height: '16px', accentColor: '#4f46e5' }}
                     />
-                    📌 위치 고정 (AI 무시)
+                    📌 위치 고정 (AI 자동배치에서 무시됨)
                   </label>
                   <p style={{ margin: '6px 0 0 0', fontSize: '11px', color: '#9ca3af' }}>💡 Shift 키를 누른 채 클릭하여 다중 선택 가능</p>
                 </div>
               )}
 
               <select value={furnitureTypeInput} onChange={e => setFurnitureTypeInput(e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid #e2e8f0', borderRadius: '12px', marginBottom: '10px', fontWeight: 'bold' }}>
-                <option>소파</option><option>침대</option><option>책상</option><option>식탁</option><option>의자</option><option>기타</option>
+                <option>침대</option><option>책상</option><option>식탁</option><option>소파</option><option>의자</option><option>기타</option>
               </select>
               
-              {furnitureTypeInput === '기타' && (
-                <input value={customFurnitureName} onChange={e => setCustomFurnitureName(e.target.value)} placeholder="가구 이름 입력" style={{ width: '100%', padding: '12px', border: '1px solid #e2e8f0', borderRadius: '12px', marginBottom: '10px', boxSizing: 'border-box' }} />
+              <div style={{ marginBottom: '10px' }}>
+                <select value={furnitureSubtypeInput} onChange={e => setFurnitureSubtypeInput(e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid #e2e8f0', borderRadius: '12px', fontSize: '13px' }}>
+                  {FURNITURE_PRESETS[furnitureTypeInput] && Object.keys(FURNITURE_PRESETS[furnitureTypeInput]).map(subtype => (
+                    <option key={subtype} value={subtype}>{subtype}</option>
+                  ))}
+                  <option value="직접입력">직접입력 (크기/이름 지정)</option>
+                </select>
+              </div>
+
+              {furnitureSubtypeInput !== '직접입력' && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', cursor: 'pointer', fontWeight: 'bold', color: '#4b5563', marginBottom: '12px' }}>
+                  <input 
+                    type="checkbox" 
+                    checked={isRotatedPreset} 
+                    onChange={() => setIsRotatedPreset(!isRotatedPreset)}
+                    style={{ width: '16px', height: '16px', accentColor: '#4f46e5' }}
+                  />
+                  🔄 추가할 가구 90도 회전 (가로 ↔ 세로)
+                </label>
+              )}
+
+              {(furnitureSubtypeInput === '직접입력' || furnitureTypeInput === '기타') && (
+                <div style={{ backgroundColor: '#f8fafc', padding: '12px', borderRadius: '12px', marginBottom: '10px', border: '1px dashed #cbd5e1' }}>
+                  <input value={customFurnitureName} onChange={e => setCustomFurnitureName(e.target.value)} placeholder="가구 이름 (예: 화분)" style={{ width: '100%', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '8px', marginBottom: '8px', boxSizing: 'border-box', fontSize: '13px' }} />
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <div style={{ flex: 1 }}>
+                      <label style={{ fontSize: '11px', color: '#64748b' }}>가로(cm)</label>
+                      <input type="number" value={customFurnitureSize.w} onChange={e => setCustomFurnitureSize({ ...customFurnitureSize, w: parseInt(e.target.value) || 0 })} style={{ width: '100%', padding: '8px', border: '1px solid #e2e8f0', borderRadius: '8px', boxSizing: 'border-box' }} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <label style={{ fontSize: '11px', color: '#64748b' }}>세로(cm)</label>
+                      <input type="number" value={customFurnitureSize.h} onChange={e => setCustomFurnitureSize({ ...customFurnitureSize, h: parseInt(e.target.value) || 0 })} style={{ width: '100%', padding: '8px', border: '1px solid #e2e8f0', borderRadius: '8px', boxSizing: 'border-box' }} />
+                    </div>
+                  </div>
+                </div>
               )}
               
-              <input type="color" value={furnitureColorInput} onChange={e => setFurnitureColorInput(e.target.value)} style={{ width: '100%', height: '44px', border: 'none', borderRadius: '12px', cursor: 'pointer', marginBottom: '16px' }} />
+              <input type="color" value={furnitureColorInput} onChange={e => setFurnitureColorInput(e.target.value)} style={{ width: '100%', height: '44px', border: 'none', borderRadius: '12px', cursor: 'pointer', marginBottom: '12px' }} />
               
+              <div style={{ backgroundColor: '#e0e7ff', color: '#3730a3', padding: '10px', borderRadius: '10px', fontSize: '12px', fontWeight: 'bold', textAlign: 'center', marginBottom: '12px' }}>
+                💡 캔버스의 빈 곳을 클릭하면 즉시 배치됩니다.
+              </div>
+
               <button onClick={handleAddFurnitureClick} style={{ width: '100%', padding: '14px', backgroundColor: '#6366f1', color: '#fff', borderRadius: '14px', fontWeight: '900', border: 'none', cursor: 'pointer', marginBottom: '24px' }}>
-                방에 추가 (클릭)
+                방 중앙에 바로 추가
               </button>
 
               <hr style={{ border: 'none', borderTop: '1px solid #e2e8f0', marginBottom: '24px' }} />
 
-              <button onClick={generateAiRecommendations} style={{ width: '100%', padding: '18px', backgroundColor: '#a855f7', color: '#fff', borderRadius: '18px', fontWeight: '900', border: 'none', cursor: 'pointer', marginBottom: '16px' }}>✨ AI 자동 배치 생성</button>
+              <button onClick={generateAiRecommendations} style={{ width: '100%', padding: '18px', backgroundColor: '#a855f7', color: '#fff', borderRadius: '18px', fontWeight: '900', border: 'none', cursor: 'pointer', marginBottom: '16px' }}>✨ AI 자동 배치 (똑똑해짐!)</button>
               
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 {aiRecommendations.map(r => (
@@ -821,20 +930,20 @@ const InteriorPlanner = () => {
                   </div>
                 ))}
               </div>
+              
               <button onClick={() => setTool(tool === 'delete' ? 'select' : 'delete')} style={{ width: '100%', marginTop: '16px', padding: '12px', borderRadius: '12px', border: tool==='delete'?'2px solid #ef4444':'none', backgroundColor: '#f9fafb', cursor: 'pointer', fontWeight: 'bold', color: tool==='delete'?'#ef4444':'#475569' }}>
-                {tool === 'delete' ? '✅ 지우개 모드 끄기' : '🗑️ 가구 지우기 모드'}
+                {tool === 'delete' ? '✅ 취소 (모드 끄기)' : '🗑️ 가구 지우개 (클릭 시 1개 제거)'}
               </button>
             </div>
           )}
         </div>
       </div>
 
-      {/* --- [배율 설정 모달] --- */}
       {showScaleModal && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100 }}>
           <div style={{ backgroundColor: '#fff', borderRadius: '24px', padding: '32px', width: '90%', maxWidth: '420px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)' }}>
             <h2 style={{ fontSize: '22px', fontWeight: '900', margin: '0 0 16px 0', color: '#1e293b' }}>📐 첫 번째 벽 길이 입력 (배율 설정)</h2>
-            <p style={{ fontSize: '14px', color: '#64748b', lineHeight: '1.5', marginBottom: '20px' }}>방의 올바른 평수 예측을 위해, 방금 그리신 첫 번째 벽의 실제 길이를 입력해 주세요.</p>
+            <p style={{ fontSize: '14px', color: '#64748b', lineHeight: '1.5', marginBottom: '20px' }}>방의 올바른 평수 예측 및 <b>가구 크기 자동 맞춤</b>을 위해, 방금 그리신 첫 번째 벽의 실제 길이를 입력해 주세요.</p>
             <div style={{ marginBottom: '24px' }}>
               <input type="number" step="0.1" defaultValue="3.5" id="wallMeterInput" style={{ width: '100%', padding: '12px', border: '2px solid #e2e8f0', borderRadius: '12px', fontSize: '16px', fontWeight: 'bold', boxSizing: 'border-box' }} placeholder="예: 3.5" />
             </div>
@@ -843,7 +952,6 @@ const InteriorPlanner = () => {
         </div>
       )}
 
-      {/* --- [방 정보 입력 모달] --- */}
       {showRoomModal && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
           <div style={{ backgroundColor: '#fff', borderRadius: '24px', padding: '32px', width: '90%', maxWidth: '400px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)' }}>
