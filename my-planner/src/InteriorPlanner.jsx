@@ -374,7 +374,7 @@ const InteriorPlanner = () => {
     if (!placed) alert("가구를 추가할 빈 공간을 찾지 못했습니다. 기존 가구를 이동시키거나 도면의 빈 공간을 직접 클릭해 추가해 보세요.");
   };
 
-  // 💡 배치 점수 계산 함수 (배치 타입별로 다르게 평가)
+  // 💡 고도화된 배치 점수 계산 함수 (타입별 정교한 평가)
   const calculateLayoutScore = (layout, layoutType) => {
     if (layout.length === 0) return 50;
     
@@ -382,14 +382,14 @@ const InteriorPlanner = () => {
     const unlockedItems = layout.filter(f => !f.isLocked);
     if (unlockedItems.length === 0) return 50;
     
-    let totalScore = 0;
-    
-    // A안 (벽면 정렬): 안정감과 동선 효율성 중심
+    // A안 (벽면 정렬): 안정감, 동선 효율성, 공간 통일성
     if (layoutType === 'rest') {
-      totalScore = 60; // 기본 60점
+      let score = 60;
       
-      // 1. 벽면 밀착도 (0-20점): 가구들이 벽에 가까운지
-      let wallProximityScore = 0;
+      // 1️⃣ 벽면 밀착도 상세 평가 (0-18점)
+      let wallAttachmentScore = 0;
+      const hostRooms = new Map();
+      
       unlockedItems.forEach(item => {
         const hostRoom = rooms.find(r => 
           item.x + item.width/2 >= r.x && 
@@ -399,28 +399,92 @@ const InteriorPlanner = () => {
         );
         
         if (hostRoom) {
+          hostRooms.set(item.id, hostRoom);
           const distToWall = Math.min(
             item.x - hostRoom.x,
             item.y - hostRoom.y,
             (hostRoom.x + hostRoom.width) - (item.x + item.width),
             (hostRoom.y + hostRoom.height) - (item.y + item.height)
           );
-          // 벽에 가까울수록 높은 점수 (최소 거리 20px 이내)
-          wallProximityScore += Math.max(0, 20 - distToWall);
+          
+          // 0-50px 범위에서 거리가 작을수록 높은 점수
+          if (distToWall <= 30) {
+            wallAttachmentScore += 18;
+          } else if (distToWall <= 50) {
+            wallAttachmentScore += 12;
+          } else if (distToWall <= 80) {
+            wallAttachmentScore += 6;
+          }
         }
       });
-      const avgWallProximity = (wallProximityScore / unlockedItems.length) / 20 * 20;
-      totalScore += Math.min(avgWallProximity, 20);
+      score += Math.min((wallAttachmentScore / unlockedItems.length), 18);
       
-      // 2. 동선 효율성 (0-20점): 가구 배치가 자연스러운지
-      totalScore += 20; // 벽면 정렬은 항상 효율적
+      // 2️⃣ 가구간 거리 균일성 (0-16점)
+      let distanceUniformityScore = 0;
+      if (unlockedItems.length > 1) {
+        const distances = [];
+        for (let i = 0; i < unlockedItems.length; i++) {
+          for (let j = i + 1; j < unlockedItems.length; j++) {
+            const dx = (unlockedItems[i].x + unlockedItems[i].width/2) - (unlockedItems[j].x + unlockedItems[j].width/2);
+            const dy = (unlockedItems[i].y + unlockedItems[i].height/2) - (unlockedItems[j].y + unlockedItems[j].height/2);
+            distances.push(Math.hypot(dx, dy));
+          }
+        }
+        
+        if (distances.length > 1) {
+          const avgDist = distances.reduce((a, b) => a + b, 0) / distances.length;
+          const variance = distances.reduce((sum, d) => sum + Math.pow(d - avgDist, 2), 0) / distances.length;
+          const stdDev = Math.sqrt(variance);
+          
+          // 표준편차가 작을수록 균일 -> 높은 점수
+          const uniformity = Math.max(0, 1 - (stdDev / (avgDist + 1)));
+          distanceUniformityScore = uniformity * 16;
+        }
+      } else {
+        distanceUniformityScore = 16; // 가구 1개는 최고점
+      }
+      score += distanceUniformityScore;
+      
+      // 3️⃣ 배치 규칙성 (0-16점) - 가구들이 정렬되어 있는가?
+      let alignmentScore = 0;
+      const xPositions = unlockedItems.map(f => f.x);
+      const yPositions = unlockedItems.map(f => f.y);
+      
+      // X축 정렬 체크
+      const xAligned = xPositions.filter((x, i, arr) => 
+        arr.some((x2, j) => i !== j && Math.abs(x - x2) < 30)
+      ).length;
+      
+      // Y축 정렬 체크
+      const yAligned = yPositions.filter((y, i, arr) => 
+        arr.some((y2, j) => i !== j && Math.abs(y - y2) < 30)
+      ).length;
+      
+      alignmentScore = ((xAligned + yAligned) / (unlockedItems.length * 2)) * 16;
+      score += Math.min(alignmentScore, 16);
+      
+      // 4️⃣ 시각적 균형 (0-12점) - 좌우/상하 대칭도
+      let balanceScore = 0;
+      const centerX = unlockedItems.reduce((sum, f) => sum + f.x + f.width/2, 0) / unlockedItems.length;
+      const centerY = unlockedItems.reduce((sum, f) => sum + f.y + f.height/2, 0) / unlockedItems.length;
+      
+      const horizontalBalance = unlockedItems.reduce((sum, f) => 
+        sum + Math.abs((f.x + f.width/2) - centerX), 0) / unlockedItems.length;
+      const verticalBalance = unlockedItems.reduce((sum, f) => 
+        sum + Math.abs((f.y + f.height/2) - centerY), 0) / unlockedItems.length;
+      
+      const maxBalance = Math.max(horizontalBalance, verticalBalance);
+      balanceScore = Math.max(0, 1 - (maxBalance / 300)) * 12;
+      score += balanceScore;
+      
+      return Math.min(Math.round(score), 100);
       
     } else {
-      // B안 (여유 공간): 개방감과 공간 활용도 중심
-      totalScore = 60; // 기본 60점
+      // B안 (중앙 공간): 개방감, 공간 활용도, 배치 다양성
+      let score = 60;
       
-      // 1. 공간 여유도 (0-20점): 가구들 사이의 거리가 충분한지
-      let spaceScore = 0;
+      // 1️⃣ 공간 여유도 상세 평가 (0-20점)
+      let spaciousnessScore = 0;
       if (unlockedItems.length > 1) {
         let totalDistances = 0;
         let pairCount = 0;
@@ -433,27 +497,96 @@ const InteriorPlanner = () => {
           }
         }
         const avgDistance = totalDistances / pairCount;
-        // 평균 거리가 150px 이상이면 만점
-        spaceScore = Math.min((avgDistance / 150) * 20, 20);
+        
+        // 거리 기준: 200px 이상 = 20점, 100px = 10점
+        if (avgDistance >= 200) {
+          spaciousnessScore = 20;
+        } else if (avgDistance >= 150) {
+          spaciousnessScore = 18;
+        } else if (avgDistance >= 100) {
+          spaciousnessScore = 12;
+        } else {
+          spaciousnessScore = Math.min((avgDistance / 100) * 12, 12);
+        }
       } else {
-        spaceScore = 20; // 가구 1개일 때는 최대점
+        spaciousnessScore = 20; // 가구 1개는 최대 여유
       }
-      totalScore += spaceScore;
+      score += spaciousnessScore;
       
-      // 2. 균형잡힌 배치 (0-20점): 가구들이 고르게 퍼져있는지
+      // 2️⃣ 중앙 오픈 스페이스 (0-18점) - 방의 중앙이 얼마나 비어있는가?
+      let centerOpenScore = 0;
       const bounds = {
         minX: Math.min(...unlockedItems.map(f => f.x)),
         maxX: Math.max(...unlockedItems.map(f => f.x + f.width)),
         minY: Math.min(...unlockedItems.map(f => f.y)),
         maxY: Math.max(...unlockedItems.map(f => f.y + f.height))
       };
+      
+      const centerZone = {
+        x: bounds.minX + (bounds.maxX - bounds.minX) * 0.25,
+        y: bounds.minY + (bounds.maxY - bounds.minY) * 0.25,
+        width: (bounds.maxX - bounds.minX) * 0.5,
+        height: (bounds.maxY - bounds.minY) * 0.5
+      };
+      
+      // 중앙 존에 겹치는 가구 개수 세기
+      const furnitureInCenter = unlockedItems.filter(f => {
+        const fCenter = { x: f.x + f.width/2, y: f.y + f.height/2 };
+        return fCenter.x >= centerZone.x && fCenter.x <= centerZone.x + centerZone.width &&
+               fCenter.y >= centerZone.y && fCenter.y <= centerZone.y + centerZone.height;
+      }).length;
+      
+      // 중앙에 가구가 적을수록 높은 점수
+      centerOpenScore = Math.max(0, 1 - (furnitureInCenter / Math.max(unlockedItems.length, 1))) * 18;
+      score += centerOpenScore;
+      
+      // 3️⃣ 사분면 균형도 (0-14점) - 방을 4등분했을 때 배치 균형
+      let quadrantBalance = 0;
+      if (unlockedItems.length > 2) {
+        const midX = (bounds.minX + bounds.maxX) / 2;
+        const midY = (bounds.minY + bounds.maxY) / 2;
+        
+        const quadrants = [0, 0, 0, 0];
+        unlockedItems.forEach(f => {
+          const fCenterX = f.x + f.width / 2;
+          const fCenterY = f.y + f.height / 2;
+          
+          const qIndex = (fCenterX >= midX ? 1 : 0) + (fCenterY >= midY ? 2 : 0);
+          quadrants[qIndex]++;
+        });
+        
+        const avgPerQuadrant = unlockedItems.length / 4;
+        const balanceVariance = quadrants.reduce((sum, q) => 
+          sum + Math.pow(q - avgPerQuadrant, 2), 0) / 4;
+        const balanceStdDev = Math.sqrt(balanceVariance);
+        
+        quadrantBalance = Math.max(0, 1 - (balanceStdDev / (avgPerQuadrant + 1))) * 14;
+      } else {
+        quadrantBalance = 14; // 가구 적으면 최고점
+      }
+      score += quadrantBalance;
+      
+      // 4️⃣ 배치 다양성 (0-12점) - 가구들이 다양한 위치에 분산되어 있는가?
+      let diversityScore = 0;
       const spreadWidth = bounds.maxX - bounds.minX;
       const spreadHeight = bounds.maxY - bounds.minY;
-      const spreadScore = Math.min(((spreadWidth + spreadHeight) / 400) * 20, 20);
-      totalScore += spreadScore;
+      const spreadArea = spreadWidth * spreadHeight;
+      
+      const avgFurnitureArea = unlockedItems.reduce((sum, f) => sum + f.width * f.height, 0) / unlockedItems.length;
+      const utilizationRatio = (unlockedItems.length * avgFurnitureArea) / spreadArea;
+      
+      // 활용도가 30-60% 정도가 이상적 (너무 촘촘하지도, 너무 퍼져있지도 않음)
+      if (utilizationRatio >= 0.3 && utilizationRatio <= 0.6) {
+        diversityScore = 12;
+      } else if (utilizationRatio >= 0.2 && utilizationRatio <= 0.7) {
+        diversityScore = 10;
+      } else {
+        diversityScore = Math.min((utilizationRatio / 0.5) * 8, 8);
+      }
+      score += diversityScore;
+      
+      return Math.min(Math.round(score), 100);
     }
-    
-    return Math.min(Math.round(totalScore), 100);
   };
 
   // 💡 AI 배치 알고리즘 전면 개편 (공간 여유도/밀집도 점수 기반 그리드 스캔)
