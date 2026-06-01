@@ -1,0 +1,12 @@
+{
+  "name": "interior-planner-root",
+  "version": "1.0.0",
+  "description": "Interior planner application",
+  "private": true,
+  "scripts": {
+    "install": "cd my-planner && npm install",
+    "build": "cd my-planner && npm run build",
+    "dev": "cd my-planner && npm run dev",
+    "preview": "cd my-planner && npm run preview"
+  }
+}

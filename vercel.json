@@ -1,7 +1,6 @@
 {
-  "buildCommand": "npm run build",
-  "outputDirectory": "dist",
-  "installCommand": "npm install",
-  "framework": "vite",
-  "root": "my-planner"
+  "buildCommand": "cd my-planner && npm run build",
+  "outputDirectory": "my-planner/dist",
+  "installCommand": "cd my-planner && npm install",
+  "framework": "vite"
 }
