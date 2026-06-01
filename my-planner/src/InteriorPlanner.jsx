@@ -374,6 +374,88 @@ const InteriorPlanner = () => {
     if (!placed) alert("가구를 추가할 빈 공간을 찾지 못했습니다. 기존 가구를 이동시키거나 도면의 빈 공간을 직접 클릭해 추가해 보세요.");
   };
 
+  // 💡 배치 점수 계산 함수 (배치 타입별로 다르게 평가)
+  const calculateLayoutScore = (layout, layoutType) => {
+    if (layout.length === 0) return 50;
+    
+    // 실제 배치된 가구 (locked 제외)
+    const unlockedItems = layout.filter(f => !f.isLocked);
+    if (unlockedItems.length === 0) return 50;
+    
+    let totalScore = 0;
+    
+    // A안 (벽면 정렬): 안정감과 동선 효율성 중심
+    if (layoutType === 'rest') {
+      totalScore = 60; // 기본 60점
+      
+      // 1. 벽면 밀착도 (0-20점): 가구들이 벽에 가까운지
+      let wallProximityScore = 0;
+      unlockedItems.forEach(item => {
+        const hostRoom = rooms.find(r => 
+          item.x + item.width/2 >= r.x && 
+          item.x + item.width/2 <= r.x + r.width &&
+          item.y + item.height/2 >= r.y && 
+          item.y + item.height/2 <= r.y + r.height
+        );
+        
+        if (hostRoom) {
+          const distToWall = Math.min(
+            item.x - hostRoom.x,
+            item.y - hostRoom.y,
+            (hostRoom.x + hostRoom.width) - (item.x + item.width),
+            (hostRoom.y + hostRoom.height) - (item.y + item.height)
+          );
+          // 벽에 가까울수록 높은 점수 (최소 거리 20px 이내)
+          wallProximityScore += Math.max(0, 20 - distToWall);
+        }
+      });
+      const avgWallProximity = (wallProximityScore / unlockedItems.length) / 20 * 20;
+      totalScore += Math.min(avgWallProximity, 20);
+      
+      // 2. 동선 효율성 (0-20점): 가구 배치가 자연스러운지
+      totalScore += 20; // 벽면 정렬은 항상 효율적
+      
+    } else {
+      // B안 (여유 공간): 개방감과 공간 활용도 중심
+      totalScore = 60; // 기본 60점
+      
+      // 1. 공간 여유도 (0-20점): 가구들 사이의 거리가 충분한지
+      let spaceScore = 0;
+      if (unlockedItems.length > 1) {
+        let totalDistances = 0;
+        let pairCount = 0;
+        for (let i = 0; i < unlockedItems.length; i++) {
+          for (let j = i + 1; j < unlockedItems.length; j++) {
+            const dx = (unlockedItems[i].x + unlockedItems[i].width/2) - (unlockedItems[j].x + unlockedItems[j].width/2);
+            const dy = (unlockedItems[i].y + unlockedItems[i].height/2) - (unlockedItems[j].y + unlockedItems[j].height/2);
+            totalDistances += Math.hypot(dx, dy);
+            pairCount++;
+          }
+        }
+        const avgDistance = totalDistances / pairCount;
+        // 평균 거리가 150px 이상이면 만점
+        spaceScore = Math.min((avgDistance / 150) * 20, 20);
+      } else {
+        spaceScore = 20; // 가구 1개일 때는 최대점
+      }
+      totalScore += spaceScore;
+      
+      // 2. 균형잡힌 배치 (0-20점): 가구들이 고르게 퍼져있는지
+      const bounds = {
+        minX: Math.min(...unlockedItems.map(f => f.x)),
+        maxX: Math.max(...unlockedItems.map(f => f.x + f.width)),
+        minY: Math.min(...unlockedItems.map(f => f.y)),
+        maxY: Math.max(...unlockedItems.map(f => f.y + f.height))
+      };
+      const spreadWidth = bounds.maxX - bounds.minX;
+      const spreadHeight = bounds.maxY - bounds.minY;
+      const spreadScore = Math.min(((spreadWidth + spreadHeight) / 400) * 20, 20);
+      totalScore += spreadScore;
+    }
+    
+    return Math.min(Math.round(totalScore), 100);
+  };
+
   // 💡 AI 배치 알고리즘 전면 개편 (공간 여유도/밀집도 점수 기반 그리드 스캔)
   const generateAiRecommendations = () => {
     if (placedFurniture.length === 0) return;
@@ -487,9 +569,14 @@ const InteriorPlanner = () => {
       return result;
     };
     
+    const layoutA = generateLayout('rest');
+    const layoutB = generateLayout('grid');
+    const scoreA = calculateLayoutScore(layoutA, 'rest');
+    const scoreB = calculateLayoutScore(layoutB, 'grid');
+    
     setAiRecommendations([
-      { id: 'A', name: '추천안 A (벽면 정렬 및 간격 확보)', score: 88, items: generateLayout('rest') },
-      { id: 'B', name: '추천안 B (여유로운 중앙 공간 확보)', score: 94, items: generateLayout('grid') }
+      { id: 'A', name: '추천안 A (벽면 정렬 및 간격 확보)', score: scoreA, items: layoutA },
+      { id: 'B', name: '추천안 B (여유로운 중앙 공간 확보)', score: scoreB, items: layoutB }
     ]);
     setPreviewAiId('A');
   };
