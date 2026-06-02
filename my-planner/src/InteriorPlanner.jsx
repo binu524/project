@@ -129,31 +129,69 @@ const InteriorPlanner = () => {
     r1.y < r2.y + r2.height && r1.y + r1.height > r2.y
   );
 
+  // 💡 [복구 완료] 벽 관통 절대 방어! CCW (외적) 기반 교차 판별 수학 공식
   const checkWallCollision = (furniture, wall) => {
-    const eps = 0.5;
-    const fLeft = furniture.x + eps; const fRight = furniture.x + furniture.width - eps;
-    const fTop = furniture.y + eps; const fBottom = furniture.y + furniture.height - eps;
+    const pad = 5; // 벽 두께를 고려한 방어막
+    const rx = furniture.x - pad;
+    const ry = furniture.y - pad;
+    const rw = furniture.width + pad * 2;
+    const rh = furniture.height + pad * 2;
 
-    const x1 = wall.start.x; const y1 = wall.start.y;
-    const x2 = wall.end.x; const y2 = wall.end.y;
+    const x1 = wall.start.x, y1 = wall.start.y;
+    const x2 = wall.end.x, y2 = wall.end.y;
 
-    if (x1 > fLeft && x1 < fRight && y1 > fTop && y1 < fBottom) return true;
-    if (x2 > fLeft && x2 < fRight && y2 > fTop && y2 < fBottom) return true;
+    // 1. 선분의 끝점이 사각형 내부에 완전히 들어온 경우
+    if ((x1 >= rx && x1 <= rx + rw && y1 >= ry && y1 <= ry + rh) ||
+        (x2 >= rx && x2 <= rx + rw && y2 >= ry && y2 <= ry + rh)) {
+      return true;
+    }
 
-    const lineIntersect = (a, b, c, d, p, q, r, s) => {
-      const det = (c - a) * (s - q) - (r - p) * (d - b);
-      if (det === 0) return false;
-      const lambda = ((s - q) * (r - a) + (p - r) * (s - b)) / det;
-      const gamma = ((b - d) * (r - a) + (c - a) * (s - b)) / det;
-      return (0 < lambda && lambda < 1) && (0 < gamma && gamma < 1);
+    // 2. 벡터 외적(CCW)을 이용한 선분 교차 검사 (일직선 겹침 완벽 대응)
+    const ccw = (px, py, qx, qy, ex, ey) => {
+      return (qx - px) * (ey - py) - (qy - py) * (ex - px);
+    };
+    
+    const intersects = (ax, ay, bx, by, cx, cy, dx, dy) => {
+      const c1 = ccw(ax, ay, bx, by, cx, cy);
+      const c2 = ccw(ax, ay, bx, by, dx, dy);
+      const c3 = ccw(cx, cy, dx, dy, ax, ay);
+      const c4 = ccw(cx, cy, dx, dy, bx, by);
+      
+      // 선분이 평행하면서 일직선 상에 포개지는 경우 (가장 큰 버그 원인 해결)
+      if (c1 === 0 && c2 === 0 && c3 === 0 && c4 === 0) {
+        const minX1 = Math.min(ax, bx), maxX1 = Math.max(ax, bx);
+        const minY1 = Math.min(ay, by), maxY1 = Math.max(ay, by);
+        const minX2 = Math.min(cx, dx), maxX2 = Math.max(cx, dx);
+        const minY2 = Math.min(cy, dy), maxY2 = Math.max(cy, dy);
+        return minX1 <= maxX2 && minX2 <= maxX1 && minY1 <= maxY2 && minY2 <= maxY1;
+      }
+      return c1 * c2 <= 0 && c3 * c4 <= 0;
     };
 
-    if (lineIntersect(x1, y1, x2, y2, fLeft, fTop, fRight, fTop)) return true;
-    if (lineIntersect(x1, y1, x2, y2, fLeft, fBottom, fRight, fBottom)) return true;
-    if (lineIntersect(x1, y1, x2, y2, fLeft, fTop, fLeft, fBottom)) return true;
-    if (lineIntersect(x1, y1, x2, y2, fRight, fTop, fRight, fBottom)) return true;
+    // 가구의 상하좌우 4면의 테두리와 벽 선분이 한 곳이라도 교차하면 차단
+    if (intersects(x1, y1, x2, y2, rx, ry, rx + rw, ry)) return true; // 상단
+    if (intersects(x1, y1, x2, y2, rx, ry + rh, rx + rw, ry + rh)) return true; // 하단
+    if (intersects(x1, y1, x2, y2, rx, ry, rx, ry + rh)) return true; // 좌측
+    if (intersects(x1, y1, x2, y2, rx + rw, ry, rx + rw, ry + rh)) return true; // 우측
 
     return false;
+  };
+
+  const getBoundaryWalls = () => [
+    { start: { x: 0, y: 0 }, end: { x: roomCanvas.width, y: 0 } },
+    { start: { x: 0, y: roomCanvas.height }, end: { x: roomCanvas.width, y: roomCanvas.height } },
+    { start: { x: 0, y: 0 }, end: { x: 0, y: roomCanvas.height } },
+    { start: { x: roomCanvas.width, y: 0 }, end: { x: roomCanvas.width, y: roomCanvas.height } }
+  ];
+
+  const getRectDistance = (r1, r2) => {
+    const left = Math.max(r1.x, r2.x);
+    const right = Math.min(r1.x + r1.width, r2.x + r2.width);
+    const top = Math.max(r1.y, r2.y);
+    const bottom = Math.min(r1.y + r1.height, r2.y + r2.height);
+    const dx = Math.max(0, left - right);
+    const dy = Math.max(0, top - bottom);
+    return Math.hypot(dx, dy);
   };
 
   const getDoorSwingBox = (door) => {
@@ -176,51 +214,30 @@ const InteriorPlanner = () => {
   const isValidPosition = (movingItem, allItems, intendedRoomId = null) => {
     if (walls.length === 0 && rooms.length === 0) return true;
     
-    let minX = 9999, minY = 9999, maxX = 0, maxY = 0;
-    
-    if (rooms.length > 0) {
-      rooms.forEach(r => {
-        if (r.x < minX) minX = r.x; if (r.y < minY) minY = r.y;
-        if (r.x + r.width > maxX) maxX = r.x + r.width; if (r.y + r.height > maxY) maxY = r.y + r.height;
-      });
-    }
-    
-    if (walls.length > 0) {
-      walls.forEach(w => {
-        const x1 = Math.min(w.start.x, w.end.x), x2 = Math.max(w.start.x, w.end.x);
-        const y1 = Math.min(w.start.y, w.end.y), y2 = Math.max(w.start.y, w.end.y);
-        if (x1 < minX) minX = x1; if (y1 < minY) minY = y1;
-        if (x2 > maxX) maxX = x2; if (y2 > maxY) maxY = y2;
-      });
-    }
+    if (movingItem.x < 0 || movingItem.y < 0 || 
+        movingItem.x + movingItem.width > roomCanvas.width || 
+        movingItem.y + movingItem.height > roomCanvas.height) return false;
 
-    if (minX === 9999) { minX = 0; minY = 0; maxX = roomCanvas.width; maxY = roomCanvas.height; }
-
-    const isInsideHouse = (
-      movingItem.x >= minX && movingItem.y >= minY && 
-      movingItem.x + movingItem.width <= maxX && movingItem.y + movingItem.height <= maxY
-    );
-    if (!isInsideHouse) return false;
-
-    if (walls.some(w => checkWallCollision(movingItem, w))) return false;
+    // 복구된 철벽 CCW 알고리즘으로 벽, 창문, 외곽선 모두 검사
+    const physicalBarriers = [...walls, ...windows, ...getBoundaryWalls()];
+    if (physicalBarriers.some(w => checkWallCollision(movingItem, w))) return false;
 
     const hitsDoorSpace = doors.some(d => {
       const swingBox = getDoorSwingBox(d);
-      const eps = 1.0; 
-      if (checkCollision(movingItem, { x: swingBox.x + eps, y: swingBox.y + eps, width: swingBox.width - 2*eps, height: swingBox.height - 2*eps })) return true;
+      if (checkCollision(movingItem, { x: swingBox.x - 2, y: swingBox.y - 2, width: swingBox.width + 4, height: swingBox.height + 4 })) return true;
 
       const isHorizontal = Math.abs(d.start.y - d.end.y) < Math.abs(d.start.x - d.end.x);
       let pMinX, pMaxX, pMinY, pMaxY;
       if (isHorizontal) {
-          pMinX = Math.min(d.start.x, d.end.x) - 5; 
-          pMaxX = Math.max(d.start.x, d.end.x) + 5;
-          pMinY = Math.min(d.start.y, d.end.y) - 30;
-          pMaxY = Math.max(d.start.y, d.end.y) + 30;
+          pMinX = Math.min(d.start.x, d.end.x) - 10; 
+          pMaxX = Math.max(d.start.x, d.end.x) + 10;
+          pMinY = Math.min(d.start.y, d.end.y) - 20; 
+          pMaxY = Math.max(d.start.y, d.end.y) + 20;
       } else {
-          pMinX = Math.min(d.start.x, d.end.x) - 30;
-          pMaxX = Math.max(d.start.x, d.end.x) + 30;
-          pMinY = Math.min(d.start.y, d.end.y) - 5;
-          pMaxY = Math.max(d.start.y, d.end.y) + 5;
+          pMinX = Math.min(d.start.x, d.end.x) - 20;
+          pMaxX = Math.max(d.start.x, d.end.x) + 20;
+          pMinY = Math.min(d.start.y, d.end.y) - 10;
+          pMaxY = Math.max(d.start.y, d.end.y) + 10;
       }
       if (checkCollision(movingItem, { x: pMinX, y: pMinY, width: pMaxX - pMinX, height: pMaxY - pMinY })) return true;
 
@@ -232,26 +249,16 @@ const InteriorPlanner = () => {
     const cy = movingItem.y + movingItem.height / 2;
     const hostRoom = rooms.find(r => cx >= r.x && cx <= r.x + r.width && cy >= r.y && cy <= r.y + r.height);
     
-    if (intendedRoomId) {
-      if (intendedRoomId === 'outer-space') {
-        if (hostRoom) return false; 
-      } else {
-        if (!hostRoom || hostRoom.id !== intendedRoomId) return false;
-        const isInsideHost = (
-          movingItem.x >= hostRoom.x && movingItem.y >= hostRoom.y &&
-          movingItem.x + movingItem.width <= hostRoom.x + hostRoom.width &&
-          movingItem.y + movingItem.height <= hostRoom.y + hostRoom.height
+    const tolerance = 5; 
+    if (intendedRoomId && intendedRoomId !== 'outer-space') {
+      const tgtRoom = rooms.find(r => r.id === intendedRoomId);
+      if (tgtRoom) {
+        const isInsideTgt = (
+          movingItem.x >= tgtRoom.x - tolerance && movingItem.y >= tgtRoom.y - tolerance &&
+          movingItem.x + movingItem.width <= tgtRoom.x + tgtRoom.width + tolerance &&
+          movingItem.y + movingItem.height <= tgtRoom.y + tgtRoom.height + tolerance
         );
-        if (!isInsideHost) return false;
-      }
-    } else {
-      if (hostRoom) {
-        const isInsideHost = (
-          movingItem.x >= hostRoom.x && movingItem.y >= hostRoom.y &&
-          movingItem.x + movingItem.width <= hostRoom.x + hostRoom.width &&
-          movingItem.y + movingItem.height <= hostRoom.y + hostRoom.height
-        );
-        if (!isInsideHost) return false;
+        if (!isInsideTgt) return false;
       }
     }
 
@@ -266,13 +273,15 @@ const InteriorPlanner = () => {
 
     let minX = 0, minY = 0, maxX = roomCanvas.width, maxY = roomCanvas.height;
     if (rooms.length > 0) {
-      minX = Math.min(...rooms.map(r => r.x)); minY = Math.min(...rooms.map(r => r.y));
-      maxX = Math.max(...rooms.map(r => r.x + r.width)); maxY = Math.max(...rooms.map(r => r.y + r.height));
+      minX = Math.max(0, Math.min(...rooms.map(r => r.x))); 
+      minY = Math.max(0, Math.min(...rooms.map(r => r.y)));
+      maxX = Math.min(roomCanvas.width, Math.max(...rooms.map(r => r.x + r.width))); 
+      maxY = Math.min(roomCanvas.height, Math.max(...rooms.map(r => r.y + r.height)));
     } else if (walls.length > 0) {
-      minX = Math.min(...walls.flatMap(w => [w.start.x, w.end.x]));
-      minY = Math.min(...walls.flatMap(w => [w.start.y, w.end.y]));
-      maxX = Math.max(...walls.flatMap(w => [w.start.x, w.end.x]));
-      maxY = Math.max(...walls.flatMap(w => [w.start.y, w.end.y]));
+      minX = Math.max(0, Math.min(...walls.flatMap(w => [w.start.x, w.end.x])));
+      minY = Math.max(0, Math.min(...walls.flatMap(w => [w.start.y, w.end.y])));
+      maxX = Math.min(roomCanvas.width, Math.max(...walls.flatMap(w => [w.start.x, w.end.x])));
+      maxY = Math.min(roomCanvas.height, Math.max(...walls.flatMap(w => [w.start.y, w.end.y])));
     }
     return { id: 'outer-space', x: minX, y: minY, width: maxX - minX, height: maxY - minY, name: '외곽영역' };
   };
@@ -308,7 +317,6 @@ const InteriorPlanner = () => {
     }));
   };
 
-  // 💡 방 중앙부터 스캔하여 배치하는 똑똑한 로직으로 변경
   const handleAddFurnitureClick = () => {
     let targetBox = { x: 40, y: 40, width: roomCanvas.width - 80, height: roomCanvas.height - 80 };
     const validRooms = rooms.filter(r => !restrictedRoomTypes.includes(r.name));
@@ -348,12 +356,9 @@ const InteriorPlanner = () => {
     };
 
     let placed = false;
-    
-    // 💡 구석이 아닌 '정중앙' 계산
     const centerX = snap(targetBox.x + targetBox.width / 2 - newItem.width / 2);
     const centerY = snap(targetBox.y + targetBox.height / 2 - newItem.height / 2);
     
-    // 💡 정중앙부터 나선형(원형)으로 퍼져나가며 빈 공간 스캔
     const maxRadius = Math.max(targetBox.width, targetBox.height);
     for (let radius = 0; radius < maxRadius; radius += gridSize) {
       for (let angle = 0; angle < 360; angle += 45) {
@@ -374,222 +379,76 @@ const InteriorPlanner = () => {
     if (!placed) alert("가구를 추가할 빈 공간을 찾지 못했습니다. 기존 가구를 이동시키거나 도면의 빈 공간을 직접 클릭해 추가해 보세요.");
   };
 
-  // 💡 고도화된 배치 점수 계산 함수 (타입별 정교한 평가)
-  const calculateLayoutScore = (layout, layoutType) => {
-    if (layout.length === 0) return 50;
+  // 💡 [복구 완료] 100점 남발 방지! 현실적이고 깐깐한 동적 채점 로직
+  const getDetailedAnalysis = (layoutToScore = placedFurniture) => {
     
-    // 실제 배치된 가구 (locked 제외)
-    const unlockedItems = layout.filter(f => !f.isLocked);
-    if (unlockedItems.length === 0) return 50;
-    
-    // A안 (벽면 정렬): 안정감, 동선 효율성, 공간 통일성
-    if (layoutType === 'rest') {
-      let score = 60;
-      
-      // 1️⃣ 벽면 밀착도 상세 평가 (0-18점)
-      let wallAttachmentScore = 0;
-      const hostRooms = new Map();
-      
-      unlockedItems.forEach(item => {
-        const hostRoom = rooms.find(r => 
-          item.x + item.width/2 >= r.x && 
-          item.x + item.width/2 <= r.x + r.width &&
-          item.y + item.height/2 >= r.y && 
-          item.y + item.height/2 <= r.y + r.height
-        );
-        
-        if (hostRoom) {
-          hostRooms.set(item.id, hostRoom);
-          const distToWall = Math.min(
-            item.x - hostRoom.x,
-            item.y - hostRoom.y,
-            (hostRoom.x + hostRoom.width) - (item.x + item.width),
-            (hostRoom.y + hostRoom.height) - (item.y + item.height)
-          );
-          
-          // 0-50px 범위에서 거리가 작을수록 높은 점수
-          if (distToWall <= 30) {
-            wallAttachmentScore += 18;
-          } else if (distToWall <= 50) {
-            wallAttachmentScore += 12;
-          } else if (distToWall <= 80) {
-            wallAttachmentScore += 6;
+    // [채광 효율성] 창문을 하나 가릴 때마다 20점 감점
+    let lightScore = windows.length > 0 ? 100 : 50; 
+    if (windows.length > 0) {
+      let blockCount = 0;
+      layoutToScore.forEach(f => {
+        windows.forEach(w => {
+          const midX = (w.start.x + w.end.x) / 2;
+          const midY = (w.start.y + w.end.y) / 2;
+          if (midX >= f.x - 30 && midX <= f.x + f.width + 30 && 
+              midY >= f.y - 30 && midY <= f.y + f.height + 30) { 
+            blockCount++; 
           }
+        });
+      });
+      lightScore -= (blockCount * 20); 
+    }
+    lightScore = Math.max(10, Math.min(100, lightScore)); 
+
+    // [동선 안심도] 문 앞을 막거나, 가구 틈이 좁을 때 가차 없이 감점
+    let trafficScore = doors.length > 0 ? 100 : 60;
+    layoutToScore.forEach(f => {
+      doors.forEach(d => {
+        const box = getDoorSwingBox(d);
+        // 문 앞 10px 범위를 침범하면 30점 감점
+        if (checkCollision(f, { x: box.x - 10, y: box.y - 10, width: box.width + 20, height: box.height + 20 })) {
+          trafficScore -= 30; 
         }
       });
-      score += Math.min((wallAttachmentScore / unlockedItems.length), 18);
-      
-      // 2️⃣ 가구간 거리 균일성 (0-16점)
-      let distanceUniformityScore = 0;
-      if (unlockedItems.length > 1) {
-        const distances = [];
-        for (let i = 0; i < unlockedItems.length; i++) {
-          for (let j = i + 1; j < unlockedItems.length; j++) {
-            const dx = (unlockedItems[i].x + unlockedItems[i].width/2) - (unlockedItems[j].x + unlockedItems[j].width/2);
-            const dy = (unlockedItems[i].y + unlockedItems[i].height/2) - (unlockedItems[j].y + unlockedItems[j].height/2);
-            distances.push(Math.hypot(dx, dy));
-          }
+    });
+
+    let narrowPathCount = 0;
+    for (let i = 0; i < layoutToScore.length; i++) {
+      for (let j = i + 1; j < layoutToScore.length; j++) {
+        const dist = getRectDistance(layoutToScore[i], layoutToScore[j]);
+        // 가구 간 거리가 40px 미만(지나다니기 불편함)이면 비좁은 통로로 판정
+        if (dist < 40) { 
+          narrowPathCount++;
         }
-        
-        if (distances.length > 1) {
-          const avgDist = distances.reduce((a, b) => a + b, 0) / distances.length;
-          const variance = distances.reduce((sum, d) => sum + Math.pow(d - avgDist, 2), 0) / distances.length;
-          const stdDev = Math.sqrt(variance);
-          
-          // 표준편차가 작을수록 균일 -> 높은 점수
-          const uniformity = Math.max(0, 1 - (stdDev / (avgDist + 1)));
-          distanceUniformityScore = uniformity * 16;
-        }
-      } else {
-        distanceUniformityScore = 16; // 가구 1개는 최고점
       }
-      score += distanceUniformityScore;
-      
-      // 3️⃣ 배치 규칙성 (0-16점) - 가구들이 정렬되어 있는가?
-      let alignmentScore = 0;
-      const xPositions = unlockedItems.map(f => f.x);
-      const yPositions = unlockedItems.map(f => f.y);
-      
-      // X축 정렬 체크
-      const xAligned = xPositions.filter((x, i, arr) => 
-        arr.some((x2, j) => i !== j && Math.abs(x - x2) < 30)
-      ).length;
-      
-      // Y축 정렬 체크
-      const yAligned = yPositions.filter((y, i, arr) => 
-        arr.some((y2, j) => i !== j && Math.abs(y - y2) < 30)
-      ).length;
-      
-      alignmentScore = ((xAligned + yAligned) / (unlockedItems.length * 2)) * 16;
-      score += Math.min(alignmentScore, 16);
-      
-      // 4️⃣ 시각적 균형 (0-12점) - 좌우/상하 대칭도
-      let balanceScore = 0;
-      const centerX = unlockedItems.reduce((sum, f) => sum + f.x + f.width/2, 0) / unlockedItems.length;
-      const centerY = unlockedItems.reduce((sum, f) => sum + f.y + f.height/2, 0) / unlockedItems.length;
-      
-      const horizontalBalance = unlockedItems.reduce((sum, f) => 
-        sum + Math.abs((f.x + f.width/2) - centerX), 0) / unlockedItems.length;
-      const verticalBalance = unlockedItems.reduce((sum, f) => 
-        sum + Math.abs((f.y + f.height/2) - centerY), 0) / unlockedItems.length;
-      
-      const maxBalance = Math.max(horizontalBalance, verticalBalance);
-      balanceScore = Math.max(0, 1 - (maxBalance / 300)) * 12;
-      score += balanceScore;
-      
-      return Math.min(Math.round(score), 100);
-      
-    } else {
-      // B안 (중앙 공간): 개방감, 공간 활용도, 배치 다양성
-      let score = 60;
-      
-      // 1️⃣ 공간 여유도 상세 평가 (0-20점)
-      let spaciousnessScore = 0;
-      if (unlockedItems.length > 1) {
-        let totalDistances = 0;
-        let pairCount = 0;
-        for (let i = 0; i < unlockedItems.length; i++) {
-          for (let j = i + 1; j < unlockedItems.length; j++) {
-            const dx = (unlockedItems[i].x + unlockedItems[i].width/2) - (unlockedItems[j].x + unlockedItems[j].width/2);
-            const dy = (unlockedItems[i].y + unlockedItems[i].height/2) - (unlockedItems[j].y + unlockedItems[j].height/2);
-            totalDistances += Math.hypot(dx, dy);
-            pairCount++;
-          }
-        }
-        const avgDistance = totalDistances / pairCount;
-        
-        // 거리 기준: 200px 이상 = 20점, 100px = 10점
-        if (avgDistance >= 200) {
-          spaciousnessScore = 20;
-        } else if (avgDistance >= 150) {
-          spaciousnessScore = 18;
-        } else if (avgDistance >= 100) {
-          spaciousnessScore = 12;
-        } else {
-          spaciousnessScore = Math.min((avgDistance / 100) * 12, 12);
-        }
-      } else {
-        spaciousnessScore = 20; // 가구 1개는 최대 여유
-      }
-      score += spaciousnessScore;
-      
-      // 2️⃣ 중앙 오픈 스페이스 (0-18점) - 방의 중앙이 얼마나 비어있는가?
-      let centerOpenScore = 0;
-      const bounds = {
-        minX: Math.min(...unlockedItems.map(f => f.x)),
-        maxX: Math.max(...unlockedItems.map(f => f.x + f.width)),
-        minY: Math.min(...unlockedItems.map(f => f.y)),
-        maxY: Math.max(...unlockedItems.map(f => f.y + f.height))
-      };
-      
-      const centerZone = {
-        x: bounds.minX + (bounds.maxX - bounds.minX) * 0.25,
-        y: bounds.minY + (bounds.maxY - bounds.minY) * 0.25,
-        width: (bounds.maxX - bounds.minX) * 0.5,
-        height: (bounds.maxY - bounds.minY) * 0.5
-      };
-      
-      // 중앙 존에 겹치는 가구 개수 세기
-      const furnitureInCenter = unlockedItems.filter(f => {
-        const fCenter = { x: f.x + f.width/2, y: f.y + f.height/2 };
-        return fCenter.x >= centerZone.x && fCenter.x <= centerZone.x + centerZone.width &&
-               fCenter.y >= centerZone.y && fCenter.y <= centerZone.y + centerZone.height;
-      }).length;
-      
-      // 중앙에 가구가 적을수록 높은 점수
-      centerOpenScore = Math.max(0, 1 - (furnitureInCenter / Math.max(unlockedItems.length, 1))) * 18;
-      score += centerOpenScore;
-      
-      // 3️⃣ 사분면 균형도 (0-14점) - 방을 4등분했을 때 배치 균형
-      let quadrantBalance = 0;
-      if (unlockedItems.length > 2) {
-        const midX = (bounds.minX + bounds.maxX) / 2;
-        const midY = (bounds.minY + bounds.maxY) / 2;
-        
-        const quadrants = [0, 0, 0, 0];
-        unlockedItems.forEach(f => {
-          const fCenterX = f.x + f.width / 2;
-          const fCenterY = f.y + f.height / 2;
-          
-          const qIndex = (fCenterX >= midX ? 1 : 0) + (fCenterY >= midY ? 2 : 0);
-          quadrants[qIndex]++;
-        });
-        
-        const avgPerQuadrant = unlockedItems.length / 4;
-        const balanceVariance = quadrants.reduce((sum, q) => 
-          sum + Math.pow(q - avgPerQuadrant, 2), 0) / 4;
-        const balanceStdDev = Math.sqrt(balanceVariance);
-        
-        quadrantBalance = Math.max(0, 1 - (balanceStdDev / (avgPerQuadrant + 1))) * 14;
-      } else {
-        quadrantBalance = 14; // 가구 적으면 최고점
-      }
-      score += quadrantBalance;
-      
-      // 4️⃣ 배치 다양성 (0-12점) - 가구들이 다양한 위치에 분산되어 있는가?
-      let diversityScore = 0;
-      const spreadWidth = bounds.maxX - bounds.minX;
-      const spreadHeight = bounds.maxY - bounds.minY;
-      const spreadArea = spreadWidth * spreadHeight;
-      
-      const avgFurnitureArea = unlockedItems.reduce((sum, f) => sum + f.width * f.height, 0) / unlockedItems.length;
-      const utilizationRatio = (unlockedItems.length * avgFurnitureArea) / spreadArea;
-      
-      // 활용도가 30-60% 정도가 이상적 (너무 촘촘하지도, 너무 퍼져있지도 않음)
-      if (utilizationRatio >= 0.3 && utilizationRatio <= 0.6) {
-        diversityScore = 12;
-      } else if (utilizationRatio >= 0.2 && utilizationRatio <= 0.7) {
-        diversityScore = 10;
-      } else {
-        diversityScore = Math.min((utilizationRatio / 0.5) * 8, 8);
-      }
-      score += diversityScore;
-      
-      return Math.min(Math.round(score), 100);
     }
+    trafficScore -= (narrowPathCount * 10); // 좁은 통로 1개당 10점 감점
+    trafficScore = Math.max(10, Math.min(100, trafficScore));
+
+    // [공간 여유도] 가장 이상적인 면적 비율을 25%로 잡고 벗어날수록 감점
+    let spaceScore = 100;
+    let totalRoomPixels = rooms.reduce((sum, r) => sum + (r.width * r.height), 0);
+    if (totalRoomPixels === 0) totalRoomPixels = roomCanvas.width * roomCanvas.height;
+    
+    const totalFurniturePixels = layoutToScore.reduce((sum, f) => sum + (f.width * f.height), 0);
+    const densityRatio = (totalFurniturePixels / totalRoomPixels) * 100;
+
+    if (densityRatio === 0) {
+      spaceScore = 30; 
+    } else if (densityRatio < 10) {
+      spaceScore = 50; 
+    } else if (densityRatio > 40) {
+      spaceScore = Math.max(10, 100 - (densityRatio - 40) * 3); // 과밀집 시 점수 급락
+    } else {
+      spaceScore = 100 - Math.abs(25 - densityRatio) * 1.5; // 25%일 때 100점
+    }
+    spaceScore = Math.max(10, Math.min(100, Math.round(spaceScore)));
+
+    const totalScore = Math.round((lightScore + trafficScore + spaceScore) / 3);
+
+    return { totalScore, traffic: trafficScore, light: lightScore, space: spaceScore, ratio: densityRatio.toFixed(1) };
   };
 
-  // 💡 AI 배치 알고리즘 전면 개편 (공간 여유도/밀집도 점수 기반 그리드 스캔)
   const generateAiRecommendations = () => {
     if (placedFurniture.length === 0) return;
 
@@ -618,7 +477,6 @@ const InteriorPlanner = () => {
         }
       });
 
-      // 면적이 큰 가구부터 먼저 자리잡게 정렬
       layoutItems.sort((a, b) => (b.width * b.height) - (a.width * a.height));
 
       const availableRooms = rooms.filter(r => !restrictedRoomTypes.includes(r.name));
@@ -639,23 +497,19 @@ const InteriorPlanner = () => {
         let bestPos = null;
         let maxScore = -99999;
 
-        // 💡 방 전체를 20px 단위 그리드로 촘촘하게 스캔
-        for (let ty = targetRoom.y; ty <= targetRoom.y + targetRoom.height - item.height; ty += gridSize) {
-          for (let tx = targetRoom.x; tx <= targetRoom.x + targetRoom.width - item.width; tx += gridSize) {
+        // 방 밖으로 절대 나가지 않도록 스캔 범위를 방 내부로 엄격히 제한
+        for (let ty = targetRoom.y + 10; ty <= targetRoom.y + targetRoom.height - item.height - 10; ty += 10) {
+          for (let tx = targetRoom.x + 10; tx <= targetRoom.x + targetRoom.width - item.width - 10; tx += 10) {
             const test = { ...item, x: tx, y: ty };
             
             if (isValidPosition(test, result, targetRoom.id)) {
-              // 1. 다른 가구들과의 최소 거리 계산 (구석에 뭉치는 것 방지)
               let minDistToOthers = 9999;
               result.forEach(other => {
-                const dx = (tx + item.width/2) - (other.x + other.width/2);
-                const dy = (ty + item.height/2) - (other.y + other.height/2);
-                const dist = Math.hypot(dx, dy);
+                const dist = getRectDistance(test, other);
                 if (dist < minDistToOthers) minDistToOthers = dist;
               });
-              if (result.length === 0) minDistToOthers = 500;
+              if (result.length === 0) minDistToOthers = 50;
 
-              // 2. 벽(방 경계선)과의 거리 계산
               const distToWall = Math.min(
                 tx - targetRoom.x, 
                 ty - targetRoom.y,
@@ -665,14 +519,11 @@ const InteriorPlanner = () => {
 
               let score = 0;
               if (type === 'rest') {
-                // A안 (안정감): 벽에는 적당히 밀착하되(음수 패널티), 다른 가구와는 거리를 벌리기
-                score = (-distToWall * 1.5) + minDistToOthers;
+                score = (-distToWall * 3.0) + (minDistToOthers * 1.0) + (Math.random() * 5);
               } else {
-                // B안 (여유 공간): 공간 한가운데를 넓게 쓰며 가구끼리 멀찌감치 띄워놓기
-                score = distToWall + (minDistToOthers * 2.5);
+                score = (distToWall * 2.0) + (minDistToOthers * 4.0) + (Math.random() * 5);
               }
 
-              // 가장 높은 점수를 받은 명당 자리 기록
               if (score > maxScore) {
                 maxScore = score;
                 bestPos = { x: tx, y: ty };
@@ -691,7 +542,6 @@ const InteriorPlanner = () => {
             result.push({ ...originalItem, x: bestPos.x, y: bestPos.y });
           }
         } else {
-          // 자리 찾기 실패 시 제자리 유지
           if (item.isGroup) item.items.forEach(subItem => result.push({ ...subItem }));
           else {
             const { isGroup, ...originalItem } = item;
@@ -704,8 +554,9 @@ const InteriorPlanner = () => {
     
     const layoutA = generateLayout('rest');
     const layoutB = generateLayout('grid');
-    const scoreA = calculateLayoutScore(layoutA, 'rest');
-    const scoreB = calculateLayoutScore(layoutB, 'grid');
+    
+    const scoreA = getDetailedAnalysis(layoutA).totalScore;
+    const scoreB = getDetailedAnalysis(layoutB).totalScore;
     
     setAiRecommendations([
       { id: 'A', name: '추천안 A (벽면 정렬 및 간격 확보)', score: scoreA, items: layoutA },
@@ -871,47 +722,6 @@ const InteriorPlanner = () => {
     }
   };
 
-  const getDetailedAnalysis = () => {
-    let lightScore = 0;
-    if (windows.length > 0) {
-      lightScore = Math.min(100, windows.length * 35); 
-      placedFurniture.forEach(f => {
-        windows.forEach(w => {
-          const midX = (w.start.x + w.end.x) / 2;
-          const midY = (w.start.y + w.end.y) / 2;
-          if (midX >= f.x - 20 && midX <= f.x + f.width + 20 && midY >= f.y - 20 && midY <= f.y + f.height + 20) { lightScore -= 15; }
-        });
-      });
-      lightScore = Math.max(15, lightScore); 
-    }
-
-    let trafficScore = doors.length > 0 ? 90 : 30;
-    placedFurniture.forEach(f => {
-      doors.forEach(d => {
-        const box = getDoorSwingBox(d);
-        if (checkCollision(f, { x: box.x, y: box.y, width: box.width, height: box.height })) {
-          trafficScore -= 25; 
-        }
-      });
-    });
-    trafficScore = Math.max(10, trafficScore);
-
-    let spaceScore = 100;
-    let totalRoomPixels = rooms.reduce((sum, r) => sum + (r.width * r.height), 0);
-    if (totalRoomPixels === 0) totalRoomPixels = roomCanvas.width * roomCanvas.height;
-    
-    const totalFurniturePixels = placedFurniture.reduce((sum, f) => sum + (f.width * f.height), 0);
-    const densityRatio = (totalFurniturePixels / totalRoomPixels) * 100;
-
-    if (densityRatio === 0) spaceScore = 50; 
-    else if (densityRatio > 40) spaceScore = Math.max(20, 100 - (densityRatio - 40) * 2.5); 
-    else spaceScore = Math.round(100 - Math.abs(25 - densityRatio)); 
-
-    const totalScore = Math.round((lightScore + trafficScore + spaceScore) / 3);
-
-    return { totalScore, traffic: trafficScore, light: lightScore, space: spaceScore, ratio: densityRatio.toFixed(1) };
-  };
-
   const currentAnalysis = getDetailedAnalysis();
 
   return (
@@ -925,7 +735,6 @@ const InteriorPlanner = () => {
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'center', gap: '40px' }}>
-        {/* 도면 캔버스 */}
         <div style={{ position: 'relative', border: '12px solid #111827', borderRadius: '24px', overflow: 'hidden', backgroundColor: '#fff', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.1)' }}>
           <svg width={roomCanvas.width} height={roomCanvas.height} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onClick={handleCanvasClick}>
             <defs><pattern id="grid" width={gridSize} height={gridSize} patternUnits="userSpaceOnUse"><path d={`M ${gridSize} 0 L 0 0 0 ${gridSize}`} fill="none" stroke="#f1f5f9" strokeWidth="1" /></pattern></defs>
@@ -1003,7 +812,6 @@ const InteriorPlanner = () => {
           </svg>
         </div>
         
-        {/* 우측 사이드바 */}
         <div style={{ width: '340px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
           {activeTab === 'editor' ? (
             <div style={{ padding: '24px', backgroundColor: '#fff', borderRadius: '24px', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.05)' }}>
@@ -1145,7 +953,10 @@ const InteriorPlanner = () => {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 {aiRecommendations.map(r => (
                   <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', backgroundColor: '#faf5ff', borderRadius: '12px', border: '1px solid #f3e8ff' }}>
-                    <span style={{ fontSize: '13px', fontWeight: 'bold' }}>{r.name}</span>
+                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                      <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#4c1d95' }}>{r.name}</span>
+                      <span style={{ fontSize: '11px', fontWeight: 'bold', color: '#7c3aed', marginTop: '4px' }}>🌟 예상 점수: {r.score}점</span>
+                    </div>
                     <button onClick={() => { setPlacedFurniture(r.items.map(i => ({...i}))); setPreviewAiId(null); setSelectedFurnitureIds([]); }} style={{ padding: '6px 14px', backgroundColor: '#a855f7', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>적용</button>
                   </div>
                 ))}
