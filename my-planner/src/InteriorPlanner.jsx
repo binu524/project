@@ -34,6 +34,12 @@ const InteriorPlanner = () => {
   const roomCanvas = { width: 900, height: 560 };
   const gridSize = 20;
   const [activeTab, setActiveTab] = useState('editor'); 
+  const recommendedStoreLinks = [
+    { name: 'IKEA 코리아', url: 'https://www.ikea.com/kr/ko/' },
+    { name: '오늘의집', url: 'https://ohou.se' },
+    { name: '29CM - 리빙', url: 'https://www.29cm.co.kr/store/category/main?categoryLargeCode=291100100&previousPage=category_main&gender=F&page=1&sort=RECOMMENDED&category=291100100' },
+    { name: '노르딕네스트', url: 'https://www.nordicnest.kr/?utm_source=google&utm_medium=cpc&utm_campaign=bb-kr-search-brand-exact&utm_id=1900447568&gad_source=1&gad_campaignid=1900447568&gbraid=0AAAAADswOPunM9BugrIEcFZ-gBIlOz22E&gclid=Cj0KCQjw2_TQBhCnARIsAF3-Xhx-NLKPDOfxQTO_7IPeMOpSPhlAm_MZ-me02NauF06m--UsghHXuoYaAj0BEALw_wcB' }
+  ];
   
   const [tool, setTool] = useState('wall'); 
   const [walls, setWalls] = useState([]);
@@ -732,6 +738,7 @@ const InteriorPlanner = () => {
         <button onClick={() => setActiveTab('editor')} style={{ padding: '12px 30px', borderRadius: '99px', fontWeight: 'bold', border: 'none', cursor: 'pointer', backgroundColor: activeTab === 'editor' ? '#6366f1' : '#f3f4f6', color: activeTab === 'editor' ? '#fff' : '#9ca3af' }}>1. 도면 그리기</button>
         <button onClick={() => setActiveTab('placement')} disabled={rooms.length === 0 && walls.length === 0} style={{ padding: '12px 30px', borderRadius: '99px', fontWeight: 'bold', border: 'none', cursor: 'pointer', backgroundColor: activeTab === 'placement' ? '#6366f1' : '#f3f4f6', color: activeTab === 'placement' ? '#fff' : '#d1d5db' }}>2. 가구 배치</button>
         <button onClick={() => setActiveTab('results')} disabled={placedFurniture.length === 0} style={{ padding: '12px 30px', borderRadius: '99px', fontWeight: 'bold', border: 'none', cursor: placedFurniture.length > 0 ? 'pointer' : 'not-allowed', backgroundColor: activeTab === 'results' ? '#6366f1' : '#f3f4f6', color: activeTab === 'results' ? '#fff' : '#d1d5db' }}>3. 결과 분석</button>
+        <button onClick={() => setActiveTab('recommendations')} style={{ padding: '12px 30px', borderRadius: '99px', fontWeight: 'bold', border: 'none', cursor: 'pointer', backgroundColor: activeTab === 'recommendations' ? '#10b981' : '#f3f4f6', color: activeTab === 'recommendations' ? '#fff' : '#9ca3af' }}>4. 추천 쇼핑몰</button>
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'center', gap: '40px' }}>
@@ -856,6 +863,18 @@ const InteriorPlanner = () => {
                   <span>📦 <b>공간 여유도</b></span>
                   <span style={{ fontWeight: 'bold', color: '#3b82f6' }}>{currentAnalysis.space}점 ({currentAnalysis.ratio}%)</span>
                 </div>
+              </div>
+            </div>
+          ) : activeTab === 'recommendations' ? (
+            <div style={{ padding: '24px', backgroundColor: '#fff', borderRadius: '24px', border: '1px solid #d1fae5' }}>
+              <h3 style={{ fontWeight: '900', fontSize: '20px', marginBottom: '16px', color: '#065f46' }}>🛍️ 추천 쇼핑몰</h3>
+              <p style={{ fontSize: '13px', color: '#4b5563', marginBottom: '18px' }}>인테리어 소품과 가구를 찾을 수 있는 인기 쇼핑몰입니다.</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                {recommendedStoreLinks.map(store => (
+                  <a key={store.url} href={store.url} target="_blank" rel="noopener noreferrer" style={{ display: 'block', padding: '16px', borderRadius: '18px', backgroundColor: '#f0fdf4', color: '#065f46', textDecoration: 'none', fontWeight: '700', border: '1px solid #a7f3d0' }}>
+                    {store.name}
+                  </a>
+                ))}
               </div>
             </div>
           ) : (
